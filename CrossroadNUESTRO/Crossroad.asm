@@ -1,0 +1,235 @@
+; * CROSSROAD BASE 
+; * El jugador sube automáticamente y se mueve a los lados.
+
+SGROUP      GROUP   CODE_SEG, DATA_SEG
+            ASSUME  CS:SGROUP, DS:SGROUP, SS:SGROUP
+
+    TRUE  EQU 1
+    FALSE EQU 0
+
+    ASCII_SPECIAL_KEY EQU 00
+    ASCII_LEFT        EQU 04Bh
+    ASCII_RIGHT       EQU 04Dh
+    ASCII_QUIT        EQU 071h ; 'q'
+
+    ASCII_PLAYER      EQU 02Ah ; Carácter '*'
+    ATTR_PLAYER       EQU 00Fh ; Blanco brillante
+    ASCII_FIELD       EQU 0DBh ; Bloque sólido para paredes
+    ATTR_FIELD        EQU 007h ; Gris
+
+    CURSOR_SIZE_HIDE EQU 02607h
+    SCREEN_MAX_ROWS EQU 25
+    SCREEN_MAX_COLS EQU 80
+
+    ; Límites de las paredes laterales
+    FIELD_C1 EQU 25
+    FIELD_C2 EQU 55
+
+CODE_SEG    SEGMENT PUBLIC
+            ORG 100h
+
+MAIN    PROC    NEAR
+    MAIN_GO:
+        CALL REGISTER_TIMER_INTERRUPT
+        CALL INIT_GAME
+        CALL INIT_SCREEN
+        CALL HIDE_CURSOR
+        CALL DRAW_WALLS
+
+        ; Posición inicial (abajo en el centro)
+        MOV DH, SCREEN_MAX_ROWS - 2
+        MOV DL, (FIELD_C1 + FIELD_C2) / 2
+        CALL MOVE_CURSOR
+        
+    MAIN_LOOP:
+        CMP [END_GAME], TRUE
+        JZ END_PROG
+
+        ; Leer teclado
+        MOV AH, 0Bh
+        INT 21h
+        CMP AL, 0
+        JZ MAIN_LOOP
+
+        CALL READ_CHAR      
+        CMP AL, ASCII_QUIT
+        JZ END_PROG
+        
+        CMP AL, ASCII_SPECIAL_KEY
+        JNZ MAIN_LOOP
+        
+        CALL READ_CHAR ; Leer código extendido
+        
+        CMP AL, ASCII_LEFT
+        JZ LEFT_KEY
+        CMP AL, ASCII_RIGHT
+        JZ RIGHT_KEY
+        JMP MAIN_LOOP
+
+    LEFT_KEY:
+        MOV [INC_COL], -1
+        JMP MAIN_LOOP
+
+    RIGHT_KEY:
+        MOV [INC_COL], 1
+        JMP MAIN_LOOP
+
+    END_PROG:
+        CALL RESTORE_TIMER_INTERRUPT
+        INT 20h     
+MAIN    ENDP    
+
+; --- DIBUJAR PAREDES LATERALES ---
+DRAW_WALLS PROC NEAR
+    MOV DH, 0
+    WALL_LOOP:
+        MOV DL, FIELD_C1
+        CALL MOVE_CURSOR
+        MOV AL, ASCII_FIELD
+        MOV BL, ATTR_FIELD
+        CALL PRINT_CHAR_ATTR
+
+        MOV DL, FIELD_C2
+        CALL MOVE_CURSOR
+        CALL PRINT_CHAR_ATTR
+
+        INC DH
+        CMP DH, SCREEN_MAX_ROWS
+        JNE WALL_LOOP
+    RET
+DRAW_WALLS ENDP
+
+; --- LÓGICA DE MOVIMIENTO (ISR) ---
+NEW_TIMER_INTERRUPT PROC NEAR
+    PUSHF
+    CALL DWORD PTR [OLD_INTERRUPT_BASE]
+    PUSH AX
+    PUSH DX
+
+    INC [INT_COUNT]
+    MOV AL, [INT_COUNT]
+    CMP [DIV_SPEED], AL
+    JNZ END_ISR
+    MOV [INT_COUNT], 0
+
+    ; Obtener posición actual del cursor (Jugador)
+    CALL GET_CURSOR_PROP 
+
+    ; Lógica de movimiento lateral
+    MOV AL, [INC_COL]
+    ADD DL, AL
+    MOV [INC_COL], 0 ; Reset del movimiento lateral tras aplicar
+
+    ; Limite lateral (Paredes)
+    CMP DL, FIELD_C1
+    JBE COLLISION
+    CMP DL, FIELD_C2
+    JAE COLLISION
+
+    ; Movimiento infinito hacia arriba
+    DEC DH
+    IF_TOP:
+        CMP DH, 0
+        JNZ CONTINUE_MOVE
+        MOV DH, SCREEN_MAX_ROWS - 1 ; Reaparece abajo si llega arriba
+
+    CONTINUE_MOVE:
+        CALL MOVE_CURSOR
+        MOV AL, ASCII_PLAYER
+        MOV BL, ATTR_PLAYER
+        CALL PRINT_CHAR_ATTR
+        JMP END_ISR
+
+    COLLISION:
+        MOV [END_GAME], TRUE
+
+    END_ISR:
+        POP DX
+        POP AX
+        IRET
+NEW_TIMER_INTERRUPT ENDP
+
+; --- FUNCIONES AUXILIARES (SIMPLIFICADAS) ---
+
+INIT_GAME PROC NEAR
+    MOV [INC_COL], 0
+    MOV [DIV_SPEED], 3 ; Velocidad de subida
+    MOV [END_GAME], FALSE
+    RET
+INIT_GAME ENDP
+
+INIT_SCREEN PROC NEAR
+    MOV AX, 3
+    INT 10h
+    RET
+INIT_SCREEN ENDP
+
+READ_CHAR PROC NEAR
+    MOV AH, 8
+    INT 21h
+    RET
+READ_CHAR ENDP
+
+PRINT_CHAR_ATTR PROC NEAR
+    MOV AH, 9
+    MOV BH, 0
+    MOV CX, 1
+    INT 10h
+    RET
+PRINT_CHAR_ATTR ENDP
+
+HIDE_CURSOR PROC NEAR
+    MOV AH, 1
+    MOV CX, CURSOR_SIZE_HIDE
+    INT 10h
+    RET
+HIDE_CURSOR ENDP
+
+GET_CURSOR_PROP PROC NEAR
+    MOV AH, 3
+    XOR BX, BX
+    INT 10h
+    RET
+GET_CURSOR_PROP ENDP
+
+SET_CURSOR_PROP PROC NEAR
+    MOV AH, 2
+    XOR BX, BX
+    INT 10h
+    RET
+SET_CURSOR_PROP ENDP
+
+MOVE_CURSOR PROC NEAR
+    CALL SET_CURSOR_PROP
+    RET
+MOVE_CURSOR ENDP
+
+REGISTER_TIMER_INTERRUPT PROC NEAR
+    MOV AX, 3508h
+    INT 21h
+    MOV WORD PTR OLD_INTERRUPT_BASE+2, ES
+    MOV WORD PTR OLD_INTERRUPT_BASE, BX
+    MOV AX, 2508h
+    MOV DX, OFFSET NEW_TIMER_INTERRUPT
+    INT 21h
+    RET
+REGISTER_TIMER_INTERRUPT ENDP
+
+RESTORE_TIMER_INTERRUPT PROC NEAR
+    LDS DX, OLD_INTERRUPT_BASE
+    MOV AX, 2508h
+    INT 21h
+    RET
+RESTORE_TIMER_INTERRUPT ENDP
+
+CODE_SEG ENDS
+
+DATA_SEG SEGMENT PUBLIC
+    OLD_INTERRUPT_BASE DW 0, 0
+    INC_COL DB 0
+    DIV_SPEED DB 0
+    INT_COUNT DB 0
+    END_GAME DB 0
+DATA_SEG ENDS
+
+END MAIN
