@@ -17,10 +17,13 @@ SGROUP      GROUP   CODE_SEG, DATA_SEG
     
     CURSOR_SIZE_HIDE  EQU 02607h
     SCREEN_MAX_ROWS   EQU 25
-    SCREEN_MAX_COLS   EQU 80
 
     FIELD_C1 EQU 25
     FIELD_C2 EQU 55
+
+    COLOR_VERDE     EQU 02h
+    COLOR_CARRETERA EQU 08h
+    COLOR_AGUA      EQU 03h
 
 CODE_SEG    SEGMENT PUBLIC
             ORG 100h
@@ -29,37 +32,28 @@ MAIN    PROC    NEAR
     MOV AX, CS
     MOV DS, AX
 
-    ; Preparación del sistema
     CALL REGISTER_TIMER_INTERRUPT
     CALL INIT_GAME
     CALL INIT_SCREEN
     CALL HIDE_CURSOR
-    CALL DRAW_INITIAL_WALLS 
+    CALL DRAW_INITIAL_MAP 
 
-    ; Posición inicial del jugador
     MOV BYTE PTR [POS_R], 20
     MOV BYTE PTR [POS_C], 40
         
 MAIN_LOOP:
     CMP BYTE PTR [END_GAME], TRUE
     JE JUMP_TO_END
-    
-    ; Leer teclado sin esperar (Polling)
     MOV AH, 0Bh
     INT 21h
     CMP AL, 0
     JE MAIN_LOOP 
-
     CALL READ_CHAR      
     CMP AL, ASCII_QUIT
     JE JUMP_TO_END
-    
     CMP AL, ASCII_SPECIAL_KEY
     JNE MAIN_LOOP
-    
     CALL READ_CHAR 
-    
-    ; Asignar movimiento según tecla
     CMP AL, ASCII_LEFT
     JE LEFT_KEY
     CMP AL, ASCII_RIGHT
@@ -70,15 +64,12 @@ MAIN_LOOP:
 
 JUMP_TO_END: JMP END_PROG
 
-LEFT_KEY:
-    MOV BYTE PTR [INC_COL], -1
-    JMP MAIN_LOOP
-RIGHT_KEY:
-    MOV BYTE PTR [INC_COL], 1
-    JMP MAIN_LOOP
-UP_KEY:
-    MOV BYTE PTR [INC_ROW], -1
-    JMP MAIN_LOOP
+LEFT_KEY:   MOV BYTE PTR [INC_COL], -1
+            JMP MAIN_LOOP
+RIGHT_KEY:  MOV BYTE PTR [INC_COL], 1
+            JMP MAIN_LOOP
+UP_KEY:     MOV BYTE PTR [INC_ROW], -1
+            JMP MAIN_LOOP
 
 END_PROG:
     CALL RESTORE_TIMER_INTERRUPT
@@ -87,21 +78,17 @@ END_PROG:
     INT 20h     
 MAIN    ENDP    
 
-; --- RUTINA DE INTERRUPCIÓN DEL RELOJ ---
 NEW_TIMER_INTERRUPT PROC NEAR
     PUSHF
     CALL DWORD PTR [OLD_INTERRUPT_BASE] 
-    
     PUSH AX
     PUSH BX
     PUSH CX
     PUSH DX
     PUSH DS
-
     MOV AX, CS
     MOV DS, AX
 
-    ; Control de velocidad
     INC BYTE PTR [INT_COUNT]
     MOV AL, BYTE PTR [INT_COUNT]
     CMP AL, BYTE PTR [DIV_SPEED]
@@ -111,7 +98,7 @@ NEW_TIMER_INTERRUPT PROC NEAR
 DO_LOGIC:
     MOV BYTE PTR [INT_COUNT], 0
 
-    ; 1. Borrar rastro del jugador
+    ; 1. Borrar rastro
     MOV DH, BYTE PTR [POS_R]
     MOV DL, BYTE PTR [POS_C]
     CALL MOVE_CURSOR
@@ -124,52 +111,76 @@ DO_LOGIC:
     ADD BYTE PTR [POS_C], AL
     MOV AL, BYTE PTR [INC_ROW]
     ADD BYTE PTR [POS_R], AL
-    
     MOV BYTE PTR [INC_COL], 0
     MOV BYTE PTR [INC_ROW], 0
 
-    ; 3. Scroll de pantalla si el jugador sube
+    ; 3. Scroll y Actualización de Memoria de Terreno
     CMP BYTE PTR [POS_R], 5
     JAE SKIP_SCROLL
     
-    MOV AX, 0701h   ; Scroll abajo 1 línea
-    MOV BH, 07h     ; Fondo negro
+    ; Scroll físico
+    MOV AX, 0701h   
+    MOV BH, 07h     
     XOR CX, CX
     MOV DX, 184Fh 
     INT 10h
     MOV BYTE PTR [POS_R], 6 
 
-SKIP_SCROLL:
-    ; 4. Cambiar y dibujar paredes en la fila superior
-    INC BYTE PTR [WALL_COLOR]
-    MOV AL, BYTE PTR [WALL_COLOR]
-    AND AL, 0Fh     ; Evitar color negro
-    JNZ SET_COL
-    MOV BYTE PTR [WALL_COLOR], 1
-SET_COL:
-    MOV BL, BYTE PTR [WALL_COLOR]
+    ; Scroll lógico: Desplazar el array de tipos de suelo hacia abajo
+    MOV SI, 23
+SHIFT_ARRAY:
+    MOV AL, [LINE_TYPES + SI]
+    MOV [LINE_TYPES + SI + 1], AL
+    DEC SI
+    CMP SI, -1
+    JNE SHIFT_ARRAY
+
+    ; Generar nueva línea arriba
+    INC BYTE PTR [MAP_LINE_COUNT]
+    CALL UPDATE_MAP_COLOR ; Actualiza CURRENT_COLOR según la secuencia
+    MOV AL, BYTE PTR [CURRENT_COLOR]
+    MOV [LINE_TYPES], AL
+
+    ; Dibujar la nueva fila 0
+    MOV BL, AL
     MOV AL, ASCII_WALL
-    
-    ; Pared Izquierda
+    CMP BL, COLOR_VERDE
+    JE DRAW_G
+    ; Carretera/Agua
     MOV DH, 0
-    MOV DL, FIELD_C1
+    MOV DL, 0
     CALL MOVE_CURSOR
-    CALL PRINT_CHAR_ATTR
-    
-    ; Pared Derecha
+    MOV CX, 80
+    CALL PRINT_MULTIPLE_CHAR
+    JMP SKIP_SCROLL
+DRAW_G:
     MOV DH, 0
+    MOV DL, 0
+    CALL MOVE_CURSOR
+    MOV CX, FIELD_C1
+    CALL PRINT_MULTIPLE_CHAR
     MOV DL, FIELD_C2
     CALL MOVE_CURSOR
-    CALL PRINT_CHAR_ATTR
+    MOV CX, 25
+    CALL PRINT_MULTIPLE_CHAR
 
-    ; 5. Detección de colisiones
+SKIP_SCROLL:
+    ; 4. LÓGICA DE COLISIÓN REAL (Basada en la fila donde está el jugador)
+    XOR BX, BX
+    MOV BL, BYTE PTR [POS_R]
+    MOV AL, [LINE_TYPES + BX] ; Obtener tipo de suelo de esa fila exacta
+
+    CMP AL, COLOR_VERDE
+    JNE DRAW_PLAYER ; Si no es verde (es carretera o agua), no muere lateralmente
+
+    ; Si la fila es verde, chequear columnas
     MOV AL, BYTE PTR [POS_C]
     CMP AL, FIELD_C1
-    JBE TRIGGER_COLLISION
+    JB TRIGGER_COLLISION
     CMP AL, FIELD_C2
     JAE TRIGGER_COLLISION
 
-    ; 6. Dibujar jugador
+DRAW_PLAYER:
     MOV DH, BYTE PTR [POS_R]
     MOV DL, BYTE PTR [POS_C]
     CALL MOVE_CURSOR
@@ -190,34 +201,69 @@ EXIT_ISR:
     IRET
 NEW_TIMER_INTERRUPT ENDP
 
-; --- FUNCIONES DE SOPORTE ---
+UPDATE_MAP_COLOR PROC NEAR
+    MOV AL, BYTE PTR [MAP_LINE_COUNT]
+    CMP AL, 10
+    JB ES_VERDE
+    CMP AL, 30
+    JB ES_CARRETERA
+    CMP AL, 40
+    JB ES_VERDE
+    CMP AL, 60
+    JB ES_CARRETERA
+    CMP AL, 70
+    JB ES_VERDE
+    CMP AL, 90
+    JB ES_AGUA
+    MOV BYTE PTR [MAP_LINE_COUNT], 0
+ES_VERDE:
+    MOV BYTE PTR [CURRENT_COLOR], COLOR_VERDE
+    RET
+ES_CARRETERA:
+    MOV BYTE PTR [CURRENT_COLOR], COLOR_CARRETERA
+    RET
+ES_AGUA:
+    MOV BYTE PTR [CURRENT_COLOR], COLOR_AGUA
+    RET
+UPDATE_MAP_COLOR ENDP
 
-DRAW_INITIAL_WALLS PROC NEAR
+PRINT_MULTIPLE_CHAR PROC NEAR
+    MOV AH, 09h
+    XOR BH, BH
+    INT 10h
+    RET
+PRINT_MULTIPLE_CHAR ENDP
+
+DRAW_INITIAL_MAP PROC NEAR
     MOV BYTE PTR [TEMP_R], 0
-LOOP_INIT_W:
+LOOP_M:
+    MOV BL, COLOR_VERDE
+    XOR AX, AX
+    MOV AL, BYTE PTR [TEMP_R]
+    MOV DI, AX
+    MOV [LINE_TYPES + DI], BL ; Llenar memoria inicial como verde
+    
     MOV DH, BYTE PTR [TEMP_R]
-    MOV DL, FIELD_C1
+    MOV DL, 0
     CALL MOVE_CURSOR
     MOV AL, ASCII_WALL
-    MOV BL, 07h
-    CALL PRINT_CHAR_ATTR
-    
+    MOV CX, FIELD_C1
+    CALL PRINT_MULTIPLE_CHAR
     MOV DL, FIELD_C2
     CALL MOVE_CURSOR
-    CALL PRINT_CHAR_ATTR
-    
+    MOV CX, 25
+    CALL PRINT_MULTIPLE_CHAR
     INC BYTE PTR [TEMP_R]
     CMP BYTE PTR [TEMP_R], 25
-    JNE LOOP_INIT_W
+    JNE LOOP_M
     RET
-DRAW_INITIAL_WALLS ENDP
+DRAW_INITIAL_MAP ENDP
 
 INIT_GAME PROC NEAR
-    MOV BYTE PTR [INC_COL], 0
-    MOV BYTE PTR [INC_ROW], 0
+    MOV BYTE PTR [MAP_LINE_COUNT], 0
+    MOV BYTE PTR [CURRENT_COLOR], COLOR_VERDE
     MOV BYTE PTR [DIV_SPEED], 2 
     MOV BYTE PTR [END_GAME], FALSE
-    MOV BYTE PTR [WALL_COLOR], 1
     RET
 INIT_GAME ENDP
 
@@ -295,8 +341,10 @@ DATA_SEG SEGMENT PUBLIC
     DIV_SPEED  DB 0
     INT_COUNT  DB 0
     END_GAME   DB 0
-    WALL_COLOR DB 1
-    TEMP_R     DB 0
+    MAP_LINE_COUNT DB 0  
+    CURRENT_COLOR  DB 0  
+    TEMP_R         DB 0
+    LINE_TYPES     DB 26 DUP(0) ; Memoria de qué hay en cada fila
 DATA_SEG ENDS
 
 END MAIN
