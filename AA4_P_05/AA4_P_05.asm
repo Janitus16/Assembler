@@ -1,63 +1,49 @@
 ; *************************************************************************
-; Data section setup and logical constants
+; Our data section. Here we declare our strings for our console message
 ; *************************************************************************
 
 SGROUP      GROUP   CODE_SEG, DATA_SEG
             ASSUME  CS:SGROUP, DS:SGROUP, SS:SGROUP
 
-    ; LOGICAL CONSTANTS
     TRUE  EQU 1
     FALSE EQU 0
 
-    ; ASCII CODES FOR SPECIAL KEYS 
     ASCII_SPECIAL_KEY EQU 00
     ASCII_LEFT        EQU 04Bh
     ASCII_RIGHT       EQU 04Dh
     ASCII_UP          EQU 048h
     ASCII_QUIT        EQU 071h ; 'q'
 
-    ; PLAYER ASCII / ATTR
     ASCII_PLAYER      EQU 02Ah ; *
     ATTR_PLAYER       EQU 00Fh ; white
 
-    ; PATH WALL ASCII / ATTR
     ASCII_WALL        EQU 0DBh 
 
-    ; CAR/LOG ASCII
-    ASCII_CAR         EQU 0DBh ; solid block
+    ASCII_CAR         EQU 0DBh 
 
-    ; CURSOR
     CURSOR_SIZE_HIDE  EQU 02607h ; BIT 5 OF CH = 1 MEANS HIDE CURSOR
     CURSOR_SIZE_SHOW  EQU 00607h
 
-    ; SCREEN DIMENSIONS
     SCREEN_MAX_ROWS   EQU 25
     SCREEN_MAX_COLS   EQU 80
 
-    ; FIELD BOUNDARIES
     FIELD_C1 EQU 25
     FIELD_C2 EQU 55
 
-    ; TERRAIN COLORS 
-    COLOR_GREEN EQU 02h ; Green 
-    COLOR_ROAD  EQU 08h ; Gray
-    COLOR_WATER EQU 03h ; Cyan 
+    COLOR_GREEN EQU 02h 
+    COLOR_ROAD  EQU 08h 
+    COLOR_WATER EQU 03h 
 
-    ; NUMBER OF CARS
     MAX_CARS      EQU 40
 
-    ; CAR SPEED DIVIDER
     CAR_DIV_SPEED EQU 3
 
 ; *************************************************************************
-; Executable assembly code starts here
+; Our executable assembly code starts here in the .code section
 ; *************************************************************************
 CODE_SEG    SEGMENT PUBLIC
             ORG 100h
 
-; ****************************************
-; Main entry point of the program.
-; ****************************************
 MAIN    PROC    NEAR
 
     MOV AX, CS
@@ -70,28 +56,23 @@ MAIN    PROC    NEAR
     CALL DRAW_INITIAL_MAP
     CALL DRAW_SCORE
 
-    ; Initial player position
     MOV BYTE PTR [POS_ROW], 20
     MOV BYTE PTR [POS_COL], 40
 
 MAIN_LOOP:
-    ; === MODIFICADO: Redirección al menú de Game Over ===
     CMP BYTE PTR [END_GAME], TRUE
     JE GAME_OVER_SCREEN
 
-    ; Check for a key
     MOV AH, 0Bh
     INT 21h
     CMP AL, 0
     JE MAIN_LOOP
 
-    ; Read available key
     CALL READ_CHAR
 
     CMP AL, ASCII_QUIT
     JE JUMP_TO_END
 
-    ; Is it a special key?
     CMP AL, ASCII_SPECIAL_KEY
     JNE MAIN_LOOP
 
@@ -105,7 +86,8 @@ MAIN_LOOP:
     JE UP_KEY
     JMP MAIN_LOOP
 
-JUMP_TO_END: JMP END_PROG
+JUMP_TO_END: 
+    JMP END_PROG
 
 LEFT_KEY:
     MOV BYTE PTR [INC_COL], -1
@@ -122,19 +104,13 @@ UP_KEY:
     MOV BYTE PTR [INC_ROW], -1
     JMP MAIN_LOOP
 
-; =========================================================================
-; NUEVA SECCIÓN: MENÚ DE FIN DE JUEGO (GAME OVER)
-; =========================================================================
 GAME_OVER_SCREEN:
-    ; Asegurar que SCORE_STR tenga la puntuación final actualizada
     CALL DRAW_SCORE
 
-    ; Limpiar pantalla en modo texto y mostrar el cursor para el menú
     MOV AX, 0003h
     INT 10h
     CALL SHOW_CURSOR
 
-    ; Imprimir "=== FIN DEL JUEGO ===" centrado
     MOV DH, 10
     MOV DL, 29
     CALL MOVE_CURSOR
@@ -142,7 +118,6 @@ GAME_OVER_SCREEN:
     LEA DX, MSG_GAME_OVER
     INT 21h
 
-    ; Imprimir "Puntuacion final: [XXXX]"
     MOV DH, 12
     MOV DL, 27
     CALL MOVE_CURSOR
@@ -154,7 +129,6 @@ GAME_OVER_SCREEN:
     MOV AH, 09h
     INT 21h
 
-    ; Imprimir "Quieres volver a jugar? (Y/N) "
     MOV DH, 15
     MOV DL, 25
     CALL MOVE_CURSOR
@@ -175,14 +149,12 @@ WAIT_REPLAY_KEY:
     JMP WAIT_REPLAY_KEY
 
 RESTART_GAME:
-    ; Resetear juego completo y regenerar mapa inicial
     CALL INIT_GAME
     CALL INIT_SCREEN
     CALL HIDE_CURSOR
     CALL DRAW_INITIAL_MAP
     CALL DRAW_SCORE
 
-    ; Reposicionar jugador al inicio
     MOV BYTE PTR [POS_ROW], 20
     MOV BYTE PTR [POS_COL], 40
     MOV BYTE PTR [INC_ROW], 0
@@ -200,12 +172,25 @@ END_PROG:
 MAIN    ENDP
 
 ; ****************************************
-; Game timer service routine (INT 08h)
+; Game timer interrupt service routine
+; Called 18.2 times per second by the operating system
+; Calls previous ISR
+; Entry: 
+;   -
+; Returns:
+;   -
+; Modifies:
+;   -
+; Uses: 
+;   OLD_INTERRUPT_BASE memory variable
+;   END_GAME memory variable
+;   CAR_INT_COUNT memory variable
+;   INT_COUNT memory variable
+;   DIV_SPEED memory variable
 ; ****************************************
-            PUBLIC NEW_TIMER_INTERRUPT
+PUBLIC NEW_TIMER_INTERRUPT
 NEW_TIMER_INTERRUPT PROC NEAR
 
-    ; Call the previous ISR
     PUSHF
     CALL DWORD PTR [OLD_INTERRUPT_BASE]
 
@@ -219,13 +204,11 @@ NEW_TIMER_INTERRUPT PROC NEAR
     MOV AX, CS
     MOV DS, AX
 
-    ; === CORREGIDO: Usamos un salto inverso con JMP para evitar "out of range" ===
     CMP BYTE PTR [END_GAME], TRUE
     JNE NOT_END_GAME
     JMP EXIT_ISR_DIRECT
 
 NOT_END_GAME:
-    ; ---- CAR/LOG MOVEMENT TICK ----
     INC BYTE PTR [CAR_INT_COUNT]
     MOV AL, BYTE PTR [CAR_INT_COUNT]
     CMP AL, CAR_DIV_SPEED
@@ -236,8 +219,6 @@ NOT_END_GAME:
     CALL DRAW_CARS
 
 SKIP_CAR_MOVE:
-
-    ; ---- PLAYER MOVEMENT TICK ----
     INC BYTE PTR [INT_COUNT]
     MOV AL, BYTE PTR [INT_COUNT]
     CMP AL, BYTE PTR [DIV_SPEED]
@@ -247,19 +228,16 @@ SKIP_CAR_MOVE:
 DO_LOGIC:
     MOV BYTE PTR [INT_COUNT], 0
 
-    ; Erase trail by restoring terrain color 
     MOV DH, BYTE PTR [POS_ROW]
     MOV DL, BYTE PTR [POS_COL]
     CALL MOVE_CURSOR
     CALL RESTORE_TRAIL_COLOR
 
-    ; PUNTUACIÓN: Si se desplaza hacia arriba (INC_ROW == -1), sumamos un punto
     CMP BYTE PTR [INC_ROW], -1
     JNE SKIP_SCORE_INC
     INC WORD PTR [SCORE]
 SKIP_SCORE_INC:
 
-    ; Update position 
     MOV AL, BYTE PTR [INC_COL]
     ADD BYTE PTR [POS_COL], AL
     MOV AL, BYTE PTR [INC_ROW]
@@ -267,13 +245,11 @@ SKIP_SCORE_INC:
     MOV BYTE PTR [INC_COL], 0
     MOV BYTE PTR [INC_ROW], 0
 
-    ; Physical and logical scroll when player reaches the top 
     CMP BYTE PTR [POS_ROW], 5
     JB DO_SCROLL
     JMP SKIP_SCROLL
 
 DO_SCROLL:
-    ; Shifts the screen one line downward
     MOV AX, 0701h
     MOV BH, 07h
     XOR CX, CX
@@ -281,19 +257,16 @@ DO_SCROLL:
     INT 10h
     MOV BYTE PTR [POS_ROW], 6
 
-    ; Shifts all car rows one position downward to follow the scroll
     CALL SHIFT_CARS_DOWN
 
-    ; Shifts the LINE_TYPES array one position downward
     MOV SI, 23
 SHIFT_ARRAY:
     MOV AL, [LINE_TYPES + SI]
     MOV [LINE_TYPES + SI + 1], AL
     DEC SI
     CMP SI, -1
-    JNE SHIFT_ARRAY
+    JNESHIFT_ARRAY
 
-    ; === BORRAR EL RASTRO DEL MARCADOR EN LA FILA 1 ===
     MOV DH, 1               
     MOV DL, 0               
     CALL MOVE_CURSOR
@@ -303,26 +276,22 @@ SHIFT_ARRAY:
     MOV CX, 4               
     CALL PRINT_MULTIPLE_CHAR
 
-    ; Generate new top line according to terrain sequence
     INC BYTE PTR [MAP_LINE_COUNT]
     CALL UPDATE_MAP_COLOR
     MOV AL, BYTE PTR [CURRENT_COLOR]
     MOV [LINE_TYPES], AL
 
-    ; Draw new row 0 according to terrain type
     MOV BL, AL
     MOV AL, ASCII_WALL
     CMP BL, COLOR_GREEN
     JE DRAW_GREEN_ROW
 
-    ; Full solid row for road or water
     MOV DH, 0
     MOV DL, 0
     CALL MOVE_CURSOR
     MOV CX, 80
     CALL PRINT_MULTIPLE_CHAR
 
-    ; If the new row is road or water, spawn obstacles
     CMP BL, COLOR_ROAD
     JE DO_SPAWN
     CMP BL, COLOR_WATER
@@ -332,7 +301,6 @@ DO_SPAWN:
     JMP SKIP_SCROLL
 
 DRAW_GREEN_ROW:
-    ; Green side walls with a gap in the center
     MOV DH, 0
     MOV DL, 0
     CALL MOVE_CURSOR
@@ -345,12 +313,10 @@ DRAW_GREEN_ROW:
 
 SKIP_SPAWN:
 SKIP_SCROLL:
-    ; Check car-player collision before drawing player
     CALL CHECK_CAR_COLLISION
     CMP BYTE PTR [END_GAME], TRUE
     JE EXIT_ISR
 
-    ; Collision logic based on terrain type of the current row 
     XOR BX, BX
     MOV BL, BYTE PTR [POS_ROW]
     MOV AL, [LINE_TYPES + BX]
@@ -358,7 +324,6 @@ SKIP_SCROLL:
     CMP AL, COLOR_GREEN
     JNE DRAW_PLAYER
 
-    ; Green zone: check if player is inside the gap
     MOV AL, BYTE PTR [POS_COL]
     CMP AL, FIELD_C1
     JB TRIGGER_COLLISION
@@ -366,7 +331,6 @@ SKIP_SCROLL:
     JAE TRIGGER_COLLISION
 
 DRAW_PLAYER:
-    ; Draw player at the new position
     MOV DH, BYTE PTR [POS_ROW]
     MOV DL, BYTE PTR [POS_COL]
     CALL MOVE_CURSOR
@@ -379,7 +343,6 @@ TRIGGER_COLLISION:
     MOV BYTE PTR [END_GAME], TRUE
 
 EXIT_ISR:
-    ; Redibujar el marcador al final asegura estabilidad visual sin rastros
     CALL DRAW_SCORE 
 EXIT_ISR_DIRECT:
     POP DS
@@ -394,9 +357,21 @@ EXIT_ISR_DIRECT:
 NEW_TIMER_INTERRUPT ENDP
 
 ; ****************************************
-; Converts score to string and prints it at top-left corner (0,0)
+; Converts score to string and prints it at top-left corner
+; Entry: 
+;   -
+; Returns:
+;   -
+; Modifies:
+;   -
+; Uses: 
+;   SCORE memory variable
+;   SCORE_STR memory variable
+; Calls:
+;   MOVE_CURSOR
+;   PRINT_CHAR_ATTR
 ; ****************************************
-            PUBLIC DRAW_SCORE
+PUBLIC DRAW_SCORE
 DRAW_SCORE  PROC NEAR
 
     PUSH AX
@@ -405,7 +380,6 @@ DRAW_SCORE  PROC NEAR
     PUSH DX
     PUSH SI
 
-    ; Convertir número SCORE a 4 dígitos en el búfer SCORE_STR
     MOV AX, WORD PTR [SCORE]
     MOV BX, 10
     MOV CX, 4
@@ -419,7 +393,6 @@ CONVERT_SCORE_LOOP:
     DEC SI
     LOOP CONVERT_SCORE_LOOP
 
-    ; Pintar el string formateado directamente en la fila 0, columnas 0-3
     MOV DH, 0               
     MOV DL, 0               
     XOR SI, SI              
@@ -444,9 +417,23 @@ PRINT_SCORE_LOOP:
 DRAW_SCORE  ENDP
 
 ; ****************************************
-; Erases all active cars/logs from the screen dynamically.
+; Erases all active objects from the screen dynamically
+; Entry: 
+;   -
+; Returns:
+;   -
+; Modifies:
+;   -
+; Uses: 
+;   NUM_CARS memory variable
+;   CARS_ROW memory variable
+;   CARS_COL memory variable
+;   LINE_TYPES memory variable
+; Calls:
+;   MOVE_CURSOR
+;   PRINT_CHAR_ATTR
 ; ****************************************
-            PUBLIC ERASE_CARS
+PUBLIC ERASE_CARS
 ERASE_CARS  PROC NEAR
 
     PUSH AX
@@ -466,7 +453,6 @@ ERASE_CARS_LOOP:
     MOV DL, BYTE PTR [CARS_COL + SI]
     CALL MOVE_CURSOR
     
-    ; Look up what background color needs to be restored
     XOR BX, BX
     MOV BL, DH
     MOV BL, BYTE PTR [LINE_TYPES + BX] 
@@ -488,21 +474,28 @@ ERASE_CARS  ENDP
 
 ; ****************************************
 ; Generates a random column between 0 and 79
+; Entry: 
+;   -
+; Returns:
+;   AL: random column index
+; Modifies:
+;   -
+; Uses: 
+;   -
+; Calls:
+;   int 21h, service AH=2Ch
 ; ****************************************
-            PUBLIC GET_RANDOM_COL
+PUBLIC GET_RANDOM_COL
 GET_RANDOM_COL PROC NEAR
     PUSH CX
     PUSH DX
 
-    ; Get system time (DL = hundredths of a second)
     MOV AH, 2Ch
     INT 21h
 
-    ; Read PIT counter port 40h for extra entropy
     IN AL, 40h
     XOR AL, DL
 
-    ; Modulo 80 to restrict column range (0-79)
     XOR AH, AH
     MOV CL, 80
     DIV CL
@@ -514,9 +507,19 @@ GET_RANDOM_COL PROC NEAR
 GET_RANDOM_COL ENDP
 
 ; ****************************************
-; Moves active cars/logs. Wrap-around behavior active.
+; Moves active cars/logs with wrap-around behavior
+; Entry: 
+;   -
+; Returns:
+;   -
+; Modifies:
+;   -
+; Uses: 
+;   NUM_CARS memory variable
+;   CARS_COL memory variable
+;   CARS_DIR memory variable
 ; ****************************************
-            PUBLIC MOVE_CARS
+PUBLIC MOVE_CARS
 MOVE_CARS   PROC NEAR
 
     PUSH AX
@@ -538,12 +541,10 @@ MOVE_CARS_LOOP:
     MOV AL, BYTE PTR [CARS_DIR + SI]
     ADD BYTE PTR [CARS_COL + SI], AL
 
-    ; Check horizontal bounds
     MOV BL, BYTE PTR [CARS_COL + SI]
     CMP BL, 80
     JB KEEP_CAR         
 
-    ; --- WRAP-AROUND MECHANIC ---
     MOV AL, BYTE PTR [CARS_DIR + SI]
     CMP AL, 1
     JE WRAP_RIGHT
@@ -582,9 +583,23 @@ MOVE_CARS_END:
 MOVE_CARS   ENDP
 
 ; ****************************************
-; Draws all active objects using their color attribute.
+; Draws all active objects using their color attribute
+; Entry: 
+;   -
+; Returns:
+;   -
+; Modifies:
+;   -
+; Uses: 
+;   NUM_CARS memory variable
+;   CARS_ROW memory variable
+;   CARS_COL memory variable
+;   CARS_ATTR memory variable
+; Calls:
+;   MOVE_CURSOR
+;   PRINT_CHAR_ATTR
 ; ****************************************
-            PUBLIC DRAW_CARS
+PUBLIC DRAW_CARS
 DRAW_CARS   PROC NEAR
 
     PUSH AX
@@ -620,9 +635,20 @@ DRAW_CARS_END:
 DRAW_CARS   ENDP
 
 ; ****************************************
-; Checks if any object occupies the same cell as the player.
+; Checks if any object occupies the same cell as the player
+; Entry: 
+;   -
+; Returns:
+;   -
+; Modifies:
+;   -
+; Uses: 
+;   NUM_CARS memory variable
+;   POS_ROW memory variable
+;   POS_COL memory variable
+;   END_GAME memory variable
 ; ****************************************
-            PUBLIC CHECK_CAR_COLLISION
+PUBLIC CHECK_CAR_COLLISION
 CHECK_CAR_COLLISION PROC NEAR
 
     PUSH AX
@@ -660,9 +686,21 @@ CHECK_CAR_END:
 CHECK_CAR_COLLISION ENDP
 
 ; ****************************************
-; Spawns 2 cars (White/Red/Yellow) or 2 Logs (Brown) on row 0.
+; Spawns active objects on row zero according to terrain type
+; Entry: 
+;   -
+; Returns:
+;   -
+; Modifies:
+;   -
+; Uses: 
+;   NUM_CARS memory variable
+;   CURRENT_COLOR memory variable
+;   MAP_LINE_COUNT memory variable
+; Calls:
+;   GET_RANDOM_COL
 ; ****************************************
-            PUBLIC SPAWN_CARS_ON_ROW_ZERO
+PUBLIC SPAWN_CARS_ON_ROW_ZERO
 SPAWN_CARS_ON_ROW_ZERO PROC NEAR
 
     PUSH AX
@@ -834,9 +872,18 @@ STORE_COUNT:
 SPAWN_CARS_ON_ROW_ZERO ENDP
 
 ; ****************************************
-; Shifts all car row positions down by 1.
+; Shifts all active object row positions down by 1
+; Entry: 
+;   -
+; Returns:
+;   -
+; Modifies:
+;   -
+; Uses: 
+;   NUM_CARS memory variable
+;   CARS_ROW memory variable
 ; ****************************************
-            PUBLIC SHIFT_CARS_DOWN
+PUBLIC SHIFT_CARS_DOWN
 SHIFT_CARS_DOWN PROC NEAR
 
     PUSH AX
@@ -871,7 +918,7 @@ SHIFT_CARS_LOOP:
 
 SHIFT_SKIP:
     INC SI
-    LOOP SHIFT_CARS_LOOP
+    LOOP SHIFT_CARS_DOWN
 
     PUSH DI
     POP AX
@@ -888,9 +935,21 @@ SHIFT_CARS_END:
 SHIFT_CARS_DOWN ENDP
 
 ; ****************************************
-; Restores the terrain color at the current cursor position.
+; Restores the background terrain color at current cell
+; Entry: 
+;   -
+; Returns:
+;   -
+; Modifies:
+;   -
+; Uses: 
+;   POS_ROW memory variable
+;   POS_COL memory variable
+;   LINE_TYPES memory variable
+; Calls:
+;   PRINT_CHAR_ATTR
 ; ****************************************
-            PUBLIC RESTORE_TRAIL_COLOR
+PUBLIC RESTORE_TRAIL_COLOR
 RESTORE_TRAIL_COLOR PROC NEAR
 
     PUSH AX
@@ -941,9 +1000,18 @@ RESTORE_END:
 RESTORE_TRAIL_COLOR ENDP
 
 ; ****************************************
-; Updates CURRENT_COLOR via safe limits
+; Updates CURRENT_COLOR sequence limits
+; Entry: 
+;   -
+; Returns:
+;   -
+; Modifies:
+;   -
+; Uses: 
+;   MAP_LINE_COUNT memory variable
+;   CURRENT_COLOR memory variable
 ; ****************************************
-            PUBLIC UPDATE_MAP_COLOR
+PUBLIC UPDATE_MAP_COLOR
 UPDATE_MAP_COLOR PROC NEAR
 
     PUSH AX
@@ -982,9 +1050,21 @@ UPDATE_MAP_COLOR_END:
 UPDATE_MAP_COLOR ENDP
 
 ; ****************************************
-; Prints character AL with attribute BL CX times.
+; Prints a character multiple times
+; Entry: 
+;   AL: ASCII character
+;   BL: attribute
+;   CX: count
+; Returns:
+;   -
+; Modifies:
+;   -
+; Uses: 
+;   -
+; Calls:
+;   int 10h, service AH=09h
 ; ****************************************
-            PUBLIC PRINT_MULTIPLE_CHAR
+PUBLIC PRINT_MULTIPLE_CHAR
 PRINT_MULTIPLE_CHAR PROC NEAR
 
     PUSH AX
@@ -1001,9 +1081,21 @@ PRINT_MULTIPLE_CHAR PROC NEAR
 PRINT_MULTIPLE_CHAR ENDP
 
 ; ****************************************
-; Draws the initial green map.
+; Draws the initial green map matrix
+; Entry: 
+;   -
+; Returns:
+;   -
+; Modifies:
+;   -
+; Uses: 
+;   TEMP_ROW memory variable
+;   LINE_TYPES memory variable
+; Calls:
+;   MOVE_CURSOR
+;   PRINT_MULTIPLE_CHAR
 ; ****************************************
-            PUBLIC DRAW_INITIAL_MAP
+PUBLIC DRAW_INITIAL_MAP
 DRAW_INITIAL_MAP PROC NEAR
 
     PUSH AX
@@ -1045,9 +1137,24 @@ LOOP_DRAW_MAP:
 DRAW_INITIAL_MAP ENDP
 
 ; ****************************************
-; Resets internal game variables.
+; Reset internal game variables
+; Entry: 
+;   -
+; Returns:
+;   -
+; Modifies:
+;   -
+; Uses: 
+;   MAP_LINE_COUNT memory variable
+;   CURRENT_COLOR memory variable
+;   DIV_SPEED memory variable
+;   INT_COUNT memory variable
+;   END_GAME memory variable
+;   NUM_CARS memory variable
+;   CAR_INT_COUNT memory variable
+;   SCORE memory variable
 ; ****************************************
-            PUBLIC INIT_GAME
+PUBLIC INIT_GAME
 INIT_GAME PROC NEAR
 
     MOV BYTE PTR [MAP_LINE_COUNT], 0
@@ -1064,9 +1171,19 @@ INIT_GAME PROC NEAR
 INIT_GAME ENDP
 
 ; ****************************************
-; Sets screen to mode 3.
+; Set screen to mode 3
+; Entry: 
+;   -
+; Returns:
+;   -
+; Modifies:
+;   -
+; Uses: 
+;   -
+; Calls:
+;   int 10h, service AH=00h
 ; ****************************************
-            PUBLIC INIT_SCREEN
+PUBLIC INIT_SCREEN
 INIT_SCREEN PROC NEAR
 
     PUSH AX
@@ -1080,9 +1197,19 @@ INIT_SCREEN PROC NEAR
 INIT_SCREEN ENDP
 
 ; ****************************************
-; Hides text cursor.
+; Hides text cursor
+; Entry: 
+;   -
+; Returns:
+;   -
+; Modifies:
+;   -
+; Uses: 
+;   CURSOR_SIZE_HIDE constant
+; Calls:
+;   int 10h, service AH=01h
 ; ****************************************
-            PUBLIC HIDE_CURSOR
+PUBLIC HIDE_CURSOR
 HIDE_CURSOR PROC NEAR
 
     PUSH AX
@@ -1099,9 +1226,19 @@ HIDE_CURSOR PROC NEAR
 HIDE_CURSOR ENDP
 
 ; ****************************************
-; Shows text cursor.
+; Shows text cursor
+; Entry: 
+;   -
+; Returns:
+;   -
+; Modifies:
+;   -
+; Uses: 
+;   CURSOR_SIZE_SHOW constant
+; Calls:
+;   int 10h, service AH=01h
 ; ****************************************
-            PUBLIC SHOW_CURSOR
+PUBLIC SHOW_CURSOR
 SHOW_CURSOR PROC NEAR
 
     PUSH AX
@@ -1118,9 +1255,19 @@ SHOW_CURSOR PROC NEAR
 SHOW_CURSOR ENDP
 
 ; ****************************************
-; Moves cursor to DH, DL.
+; Moves cursor to coordinate
+; Entry: 
+;   (DH, DL): coordinates -> (row, col)
+; Returns:
+;   -
+; Modifies:
+;   -
+; Uses: 
+;   -
+; Calls:
+;   int 10h, service AH=02h
 ; ****************************************
-            PUBLIC MOVE_CURSOR
+PUBLIC MOVE_CURSOR
 MOVE_CURSOR PROC NEAR
 
     PUSH AX
@@ -1137,9 +1284,20 @@ MOVE_CURSOR PROC NEAR
 MOVE_CURSOR ENDP
 
 ; ****************************************
-; Prints a character and attribute at cursor.
+; Prints a character and attribute at cursor position
+; Entry: 
+;   AL: ASCII code
+;   BL: attribute
+; Returns:
+;   -
+; Modifies:
+;   -
+; Uses: 
+;   -
+; Calls:
+;   int 10h, service AH=09h
 ; ****************************************
-            PUBLIC PRINT_CHAR_ATTR
+PUBLIC PRINT_CHAR_ATTR
 PRINT_CHAR_ATTR PROC NEAR
 
     PUSH AX
@@ -1159,9 +1317,19 @@ PRINT_CHAR_ATTR PROC NEAR
 PRINT_CHAR_ATTR ENDP
 
 ; ****************************************
-; Reads a character from keyboard without echo.
+; Reads char from keyboard without echo
+; Entry: 
+;   -
+; Returns:
+;   AL: ASCII code
+; Modifies:
+;   -
+; Uses: 
+;   -
+; Calls:
+;   int 21h, service AH=08h
 ; ****************************************
-            PUBLIC READ_CHAR
+PUBLIC READ_CHAR
 READ_CHAR PROC NEAR
 
     MOV AH, 08h
@@ -1172,9 +1340,20 @@ READ_CHAR PROC NEAR
 READ_CHAR ENDP
 
 ; ****************************************
-; Registers the new timer ISR (INT 08h).
+; Replaces current timer ISR with game timer ISR
+; Entry: 
+;   -
+; Returns:
+;   -
+; Modifies:
+;   -
+; Uses: 
+;   OLD_INTERRUPT_BASE memory variable
+; Calls:
+;   int 21h, service AH=35h
+;   int 21h, service AH=25h
 ; ****************************************
-            PUBLIC REGISTER_TIMER_INTERRUPT
+PUBLIC REGISTER_TIMER_INTERRUPT
 REGISTER_TIMER_INTERRUPT PROC NEAR
 
     PUSH AX
@@ -1204,9 +1383,19 @@ REGISTER_TIMER_INTERRUPT PROC NEAR
 REGISTER_TIMER_INTERRUPT ENDP
 
 ; ****************************************
-; Restores the original timer ISR.
+; Restore system timer ISR
+; Entry: 
+;   -
+; Returns:
+;   -
+; Modifies:
+;   -
+; Uses: 
+;   OLD_INTERRUPT_BASE memory variable
+; Calls:
+;   int 21h, service AH=25h
 ; ****************************************
-            PUBLIC RESTORE_TIMER_INTERRUPT
+PUBLIC RESTORE_TIMER_INTERRUPT
 RESTORE_TIMER_INTERRUPT PROC NEAR
 
     PUSH AX
@@ -1231,9 +1420,6 @@ RESTORE_TIMER_INTERRUPT ENDP
 
 CODE_SEG ENDS
 
-; *************************************************************************
-; Data section: game variables
-; *************************************************************************
 DATA_SEG    SEGMENT PUBLIC
 
     OLD_INTERRUPT_BASE  DW 0, 0
@@ -1256,7 +1442,6 @@ DATA_SEG    SEGMENT PUBLIC
 
     LINE_TYPES     DB 26 DUP(0)
 
-    ; Car/Log Subsystem
     CAR_INT_COUNT  DB 0
     NUM_CARS       DB 0
     CARS_ROW       DB MAX_CARS DUP(0)
@@ -1264,15 +1449,11 @@ DATA_SEG    SEGMENT PUBLIC
     CARS_DIR       DB MAX_CARS DUP(0)
     CARS_ATTR      DB MAX_CARS DUP(0)
 
-    ; Score Subsystem
     SCORE      DW 0
-    ; === MODIFICADO: Añadido '$' final para poder imprimirlo con INT 21h/AH=09h ===
     SCORE_STR  DB '0','0','0','0','$'
 
-    ; === NUEVO: Cadenas de texto para el menú de Game Over ===
     MSG_GAME_OVER   DB '=== FIN DEL JUEGO ===', '$'
     MSG_FINAL_SCORE DB 'Puntuacion final: ', '$'
-    ; === MODIFICADO: Sin '¿' al inicio y sin ':' al final ===
     MSG_REPLAY      DB 'Quieres volver a jugar? (Y/N) ', '$'
 
 DATA_SEG ENDS
