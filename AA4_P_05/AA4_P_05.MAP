@@ -1,7 +1,7 @@
 
  Start  Stop   Length Name               Class
 
- 00000H 0070FH 00710H CODE_SEG           
- 00710H 007DFH 000D0H DATA_SEG           
+ 00000H 00790H 00791H CODE_SEG           
+ 007A0H 008B8H 00119H DATA_SEG           
 
 

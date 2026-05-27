@@ -75,8 +75,9 @@ MAIN    PROC    NEAR
     MOV BYTE PTR [POS_COL], 40
 
 MAIN_LOOP:
+    ; === MODIFICADO: Redirección al menú de Game Over ===
     CMP BYTE PTR [END_GAME], TRUE
-    JE JUMP_TO_END
+    JE GAME_OVER_SCREEN
 
     ; Check for a key
     MOV AH, 0Bh
@@ -121,6 +122,74 @@ UP_KEY:
     MOV BYTE PTR [INC_ROW], -1
     JMP MAIN_LOOP
 
+; =========================================================================
+; NUEVA SECCIÓN: MENÚ DE FIN DE JUEGO (GAME OVER)
+; =========================================================================
+GAME_OVER_SCREEN:
+    ; Asegurar que SCORE_STR tenga la puntuación final actualizada
+    CALL DRAW_SCORE
+
+    ; Limpiar pantalla en modo texto y mostrar el cursor para el menú
+    MOV AX, 0003h
+    INT 10h
+    CALL SHOW_CURSOR
+
+    ; Imprimir "=== FIN DEL JUEGO ===" centrado
+    MOV DH, 10
+    MOV DL, 29
+    CALL MOVE_CURSOR
+    MOV AH, 09h
+    LEA DX, MSG_GAME_OVER
+    INT 21h
+
+    ; Imprimir "Puntuacion final: [XXXX]"
+    MOV DH, 12
+    MOV DL, 27
+    CALL MOVE_CURSOR
+    MOV AH, 09h
+    LEA DX, MSG_FINAL_SCORE
+    INT 21h
+    
+    LEA DX, SCORE_STR
+    MOV AH, 09h
+    INT 21h
+
+    ; Imprimir "Quieres volver a jugar? (Y/N) "
+    MOV DH, 15
+    MOV DL, 25
+    CALL MOVE_CURSOR
+    MOV AH, 09h
+    LEA DX, MSG_REPLAY
+    INT 21h
+
+WAIT_REPLAY_KEY:
+    CALL READ_CHAR
+    CMP AL, 'Y'
+    JE RESTART_GAME
+    CMP AL, 'y'
+    JE RESTART_GAME
+    CMP AL, 'N'
+    JE END_PROG
+    CMP AL, 'n'
+    JE END_PROG
+    JMP WAIT_REPLAY_KEY
+
+RESTART_GAME:
+    ; Resetear juego completo y regenerar mapa inicial
+    CALL INIT_GAME
+    CALL INIT_SCREEN
+    CALL HIDE_CURSOR
+    CALL DRAW_INITIAL_MAP
+    CALL DRAW_SCORE
+
+    ; Reposicionar jugador al inicio
+    MOV BYTE PTR [POS_ROW], 20
+    MOV BYTE PTR [POS_COL], 40
+    MOV BYTE PTR [INC_ROW], 0
+    MOV BYTE PTR [INC_COL], 0
+
+    JMP MAIN_LOOP
+
 END_PROG:
     CALL RESTORE_TIMER_INTERRUPT
     CALL SHOW_CURSOR
@@ -150,6 +219,12 @@ NEW_TIMER_INTERRUPT PROC NEAR
     MOV AX, CS
     MOV DS, AX
 
+    ; === CORREGIDO: Usamos un salto inverso con JMP para evitar "out of range" ===
+    CMP BYTE PTR [END_GAME], TRUE
+    JNE NOT_END_GAME
+    JMP EXIT_ISR_DIRECT
+
+NOT_END_GAME:
     ; ---- CAR/LOG MOVEMENT TICK ----
     INC BYTE PTR [CAR_INT_COUNT]
     MOV AL, BYTE PTR [CAR_INT_COUNT]
@@ -306,6 +381,7 @@ TRIGGER_COLLISION:
 EXIT_ISR:
     ; Redibujar el marcador al final asegura estabilidad visual sin rastros
     CALL DRAW_SCORE 
+EXIT_ISR_DIRECT:
     POP DS
     POP DI
     POP SI
@@ -1051,7 +1127,7 @@ MOVE_CURSOR PROC NEAR
     PUSH BX
 
     MOV AH, 02h
-    XOR BH, BH ; <- CORREGIDO: Ahora limpia correctamente el registro de 8 bits
+    XOR BH, BH 
     INT 10h
 
     POP BX
@@ -1189,8 +1265,15 @@ DATA_SEG    SEGMENT PUBLIC
     CARS_ATTR      DB MAX_CARS DUP(0)
 
     ; Score Subsystem
-    SCORE          DW 0
-    SCORE_STR      DB '0','0','0','0'
+    SCORE      DW 0
+    ; === MODIFICADO: Añadido '$' final para poder imprimirlo con INT 21h/AH=09h ===
+    SCORE_STR  DB '0','0','0','0','$'
+
+    ; === NUEVO: Cadenas de texto para el menú de Game Over ===
+    MSG_GAME_OVER   DB '=== FIN DEL JUEGO ===', '$'
+    MSG_FINAL_SCORE DB 'Puntuacion final: ', '$'
+    ; === MODIFICADO: Sin '¿' al inicio y sin ':' al final ===
+    MSG_REPLAY      DB 'Quieres volver a jugar? (Y/N) ', '$'
 
 DATA_SEG ENDS
 
