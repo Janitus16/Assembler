@@ -23,6 +23,10 @@ SGROUP      GROUP   CODE_SEG, DATA_SEG
     ; PATH WALL ASCII / ATTR
     ASCII_WALL        EQU 0DBh 
 
+    ; CAR ASCII / ATTR
+    ASCII_CAR         EQU 0DBh ; solid block same as wall
+    ATTR_CAR          EQU 04Fh ; white on red
+
     ; CURSOR
     CURSOR_SIZE_HIDE  EQU 02607h ; BIT 5 OF CH = 1 MEANS HIDE CURSOR
     CURSOR_SIZE_SHOW  EQU 00607h
@@ -40,10 +44,11 @@ SGROUP      GROUP   CODE_SEG, DATA_SEG
     COLOR_ROAD  EQU 08h ; Gray
     COLOR_WATER EQU 03h ; Cyan 
 
-    ; BACKGROUND ATTR FOR TRAIL RESTORE 
-    ATTR_BG_GREEN EQU 020h 
-    ATTR_BG_ROAD  EQU 080h  
-    ATTR_BG_WATER EQU 030h  
+    ; NUMBER OF CARS (2 per road row, max 2 road segments of 20 rows = 40 cars)
+    MAX_CARS      EQU 40
+
+    ; CAR SPEED DIVIDER (cars move every CAR_DIV_SPEED timer interrupts)
+    CAR_DIV_SPEED EQU 3
 
 ; *************************************************************************
 ; Our executable assembly code starts here in the .code section
@@ -142,7 +147,8 @@ MAIN    ENDP
 ; Game timer service routine.
 ; Called ~18.2 times/second by the OS.
 ; Handles: trail erasing with terrain color,
-; movement, scroll, collision and player drawing.
+; player movement, scroll, collision, player drawing,
+; car movement and car-player collision.
 ; Entry:
 ; 
 ; Returns:
@@ -151,11 +157,14 @@ MAIN    ENDP
 ; 
 ; Uses:
 ;   OLD_INTERRUPT_BASE, INT_COUNT, DIV_SPEED,
+;   CAR_INT_COUNT, CAR_DIV_SPEED,
 ;   POS_ROW, POS_COL, INC_ROW, INC_COL,
-;   LINE_TYPES, END_GAME
+;   LINE_TYPES, END_GAME,
+;   CARS_ROW, CARS_COL, CARS_DIR, NUM_CARS
 ; Calls:
 ;   MOVE_CURSOR, PRINT_CHAR_ATTR, RESTORE_TRAIL_COLOR,
-;   UPDATE_MAP_COLOR, PRINT_MULTIPLE_CHAR
+;   UPDATE_MAP_COLOR, PRINT_MULTIPLE_CHAR,
+;   ERASE_CARS, MOVE_CARS, DRAW_CARS, CHECK_CAR_COLLISION
 ; ****************************************
             PUBLIC NEW_TIMER_INTERRUPT
 NEW_TIMER_INTERRUPT PROC NEAR
@@ -168,11 +177,25 @@ NEW_TIMER_INTERRUPT PROC NEAR
     PUSH BX
     PUSH CX
     PUSH DX
+    PUSH SI
+    PUSH DI
     PUSH DS
     MOV AX, CS
     MOV DS, AX
 
-    ; Increment counter and check if it is time to act
+    ; ---- CAR MOVEMENT TICK ----
+    INC BYTE PTR [CAR_INT_COUNT]
+    MOV AL, BYTE PTR [CAR_INT_COUNT]
+    CMP AL, CAR_DIV_SPEED
+    JNE SKIP_CAR_MOVE
+    MOV BYTE PTR [CAR_INT_COUNT], 0
+    CALL ERASE_CARS
+    CALL MOVE_CARS
+    CALL DRAW_CARS
+
+SKIP_CAR_MOVE:
+
+    ; ---- PLAYER MOVEMENT TICK ----
     INC BYTE PTR [INT_COUNT]
     MOV AL, BYTE PTR [INT_COUNT]
     CMP AL, BYTE PTR [DIV_SPEED]
@@ -208,6 +231,9 @@ DO_LOGIC:
     INT 10h
     MOV BYTE PTR [POS_ROW], 6
 
+    ; Shifts all car rows one position downward to follow the scroll
+    CALL SHIFT_CARS_DOWN
+
     ; Shifts the LINE_TYPES array one position downward
     MOV SI, 23
 SHIFT_ARRAY:
@@ -229,12 +255,17 @@ SHIFT_ARRAY:
     CMP BL, COLOR_GREEN
     JE DRAW_GREEN_ROW
 
-    ; Full solid row of water
+    ; Full solid row for road or water
     MOV DH, 0
     MOV DL, 0
     CALL MOVE_CURSOR
     MOV CX, 80
     CALL PRINT_MULTIPLE_CHAR
+
+    ; If the new row is road, spawn 2 cars on it
+    CMP BL, COLOR_ROAD
+    JNE SKIP_SPAWN
+    CALL SPAWN_CARS_ON_ROW_ZERO
     JMP SKIP_SCROLL
 
 DRAW_GREEN_ROW:
@@ -249,16 +280,22 @@ DRAW_GREEN_ROW:
     MOV CX, 25
     CALL PRINT_MULTIPLE_CHAR
 
+SKIP_SPAWN:
 SKIP_SCROLL:
+    ; Check car-player collision before drawing player
+    CALL CHECK_CAR_COLLISION
+    CMP BYTE PTR [END_GAME], TRUE
+    JE EXIT_ISR
+
     ; Collision logic based on terrain type of the current row 
     XOR BX, BX
     MOV BL, BYTE PTR [POS_ROW]
-    MOV AL, [LINE_TYPES + BX] ; Ground type where the player is standing
+    MOV AL, [LINE_TYPES + BX]
 
     CMP AL, COLOR_GREEN
-    JNE DRAW_PLAYER ; Road/Water, no side walls
+    JNE DRAW_PLAYER
 
-    ; Green zone check if player is inside the gap
+    ; Green zone: check if player is inside the gap
     MOV AL, BYTE PTR [POS_COL]
     CMP AL, FIELD_C1
     JB TRIGGER_COLLISION
@@ -280,6 +317,8 @@ TRIGGER_COLLISION:
 
 EXIT_ISR:
     POP DS
+    POP DI
+    POP SI
     POP DX
     POP CX
     POP BX
@@ -289,11 +328,369 @@ EXIT_ISR:
 NEW_TIMER_INTERRUPT ENDP
 
 ; ****************************************
+; Erases all active cars from the screen,
+; restoring the road color underneath.
+; Entry:
+;   NUM_CARS: number of active cars
+;   CARS_ROW, CARS_COL: car positions
+; Returns:
+;   -
+; Modifies:
+;   -
+; Uses:
+;   NUM_CARS, CARS_ROW, CARS_COL
+; Calls:
+;   MOVE_CURSOR, PRINT_CHAR_ATTR
+; ****************************************
+            PUBLIC ERASE_CARS
+ERASE_CARS  PROC NEAR
+
+    PUSH AX
+    PUSH BX
+    PUSH CX
+    PUSH DX
+    PUSH SI
+
+    XOR SI, SI
+    MOV CL, BYTE PTR [NUM_CARS]
+    XOR CH, CH
+    CMP CX, 0
+    JE ERASE_CARS_END
+
+ERASE_CARS_LOOP:
+    MOV DH, BYTE PTR [CARS_ROW + SI]
+    MOV DL, BYTE PTR [CARS_COL + SI]
+    CALL MOVE_CURSOR
+    MOV AL, ASCII_WALL
+    MOV BL, COLOR_ROAD
+    CALL PRINT_CHAR_ATTR
+    INC SI
+    LOOP ERASE_CARS_LOOP
+
+ERASE_CARS_END:
+    POP SI
+    POP DX
+    POP CX
+    POP BX
+    POP AX
+    RET
+
+ERASE_CARS  ENDP
+
+; ****************************************
+; Moves all active cars one column in their direction.
+; Cars that go off screen are removed from the array.
+; Entry:
+;   NUM_CARS, CARS_ROW, CARS_COL, CARS_DIR
+; Returns:
+;   -
+; Modifies:
+;   NUM_CARS, CARS_COL
+; Uses:
+;   CARS_ROW, CARS_COL, CARS_DIR, NUM_CARS
+; Calls:
+;   -
+; ****************************************
+            PUBLIC MOVE_CARS
+MOVE_CARS   PROC NEAR
+
+    PUSH AX
+    PUSH BX
+    PUSH CX
+    PUSH DX
+    PUSH SI
+    PUSH DI
+
+    MOV CL, BYTE PTR [NUM_CARS]
+    XOR CH, CH
+    CMP CX, 0
+    JE MOVE_CARS_END
+
+    XOR SI, SI          ; current index
+    XOR DI, DI          ; write index (for compaction)
+
+MOVE_CARS_LOOP:
+    MOV AL, BYTE PTR [CARS_DIR + SI]
+    ADD BYTE PTR [CARS_COL + SI], AL
+
+    ; Check bounds: col < 0 or col >= 80
+    MOV BL, BYTE PTR [CARS_COL + SI]
+    CMP BL, 80
+    JAE SKIP_CAR        ; off screen, drop it (>=80 also catches wrap of -1 -> 255)
+
+    ; Keep car: copy to write index
+    MOV AL, BYTE PTR [CARS_ROW + SI]
+    MOV BYTE PTR [CARS_ROW + DI], AL
+    MOV AL, BYTE PTR [CARS_COL + SI]
+    MOV BYTE PTR [CARS_COL + DI], AL
+    MOV AL, BYTE PTR [CARS_DIR + SI]
+    MOV BYTE PTR [CARS_DIR + DI], AL
+    INC DI
+
+SKIP_CAR:
+    INC SI
+    LOOP MOVE_CARS_LOOP
+
+    ; DI holds the new count of surviving cars
+    PUSH DI
+    POP AX
+    MOV BYTE PTR [NUM_CARS], AL
+
+MOVE_CARS_END:
+    POP DI
+    POP SI
+    POP DX
+    POP CX
+    POP BX
+    POP AX
+    RET
+
+MOVE_CARS   ENDP
+
+; ****************************************
+; Draws all active cars on the screen.
+; Entry:
+;   NUM_CARS, CARS_ROW, CARS_COL
+; Returns:
+;   -
+; Modifies:
+;   -
+; Uses:
+;   NUM_CARS, CARS_ROW, CARS_COL
+; Calls:
+;   MOVE_CURSOR, PRINT_CHAR_ATTR
+; ****************************************
+            PUBLIC DRAW_CARS
+DRAW_CARS   PROC NEAR
+
+    PUSH AX
+    PUSH BX
+    PUSH CX
+    PUSH DX
+    PUSH SI
+
+    XOR SI, SI
+    MOV CL, BYTE PTR [NUM_CARS]
+    XOR CH, CH
+    CMP CX, 0
+    JE DRAW_CARS_END
+
+DRAW_CARS_LOOP:
+    MOV DH, BYTE PTR [CARS_ROW + SI]
+    MOV DL, BYTE PTR [CARS_COL + SI]
+    CALL MOVE_CURSOR
+    MOV AL, ASCII_CAR
+    MOV BL, ATTR_CAR
+    CALL PRINT_CHAR_ATTR
+    INC SI
+    LOOP DRAW_CARS_LOOP
+
+DRAW_CARS_END:
+    POP SI
+    POP DX
+    POP CX
+    POP BX
+    POP AX
+    RET
+
+DRAW_CARS   ENDP
+
+; ****************************************
+; Checks if any car occupies the same cell as the player.
+; If so, sets END_GAME = TRUE.
+; Entry:
+;   POS_ROW, POS_COL, NUM_CARS, CARS_ROW, CARS_COL
+; Returns:
+;   END_GAME = TRUE if collision detected
+; Modifies:
+;   -
+; Uses:
+;   POS_ROW, POS_COL, NUM_CARS, CARS_ROW, CARS_COL
+; Calls:
+;   -
+; ****************************************
+            PUBLIC CHECK_CAR_COLLISION
+CHECK_CAR_COLLISION PROC NEAR
+
+    PUSH AX
+    PUSH BX
+    PUSH CX
+    PUSH SI
+
+    XOR SI, SI
+    MOV CL, BYTE PTR [NUM_CARS]
+    XOR CH, CH
+    CMP CX, 0
+    JE CHECK_CAR_END
+
+CHECK_CAR_LOOP:
+    MOV AL, BYTE PTR [CARS_ROW + SI]
+    CMP AL, BYTE PTR [POS_ROW]
+    JNE CHECK_CAR_NEXT
+    MOV AL, BYTE PTR [CARS_COL + SI]
+    CMP AL, BYTE PTR [POS_COL]
+    JNE CHECK_CAR_NEXT
+    MOV BYTE PTR [END_GAME], TRUE
+    JMP CHECK_CAR_END
+
+CHECK_CAR_NEXT:
+    INC SI
+    LOOP CHECK_CAR_LOOP
+
+CHECK_CAR_END:
+    POP SI
+    POP CX
+    POP BX
+    POP AX
+    RET
+
+CHECK_CAR_COLLISION ENDP
+
+; ****************************************
+; Spawns 2 cars on row 0 (just scrolled in).
+; Alternates direction based on MAP_LINE_COUNT parity.
+; Car 1 starts at col 0, Car 2 at col 40.
+; Entry:
+;   MAP_LINE_COUNT used to determine direction
+;   NUM_CARS: current count (will be incremented by 2)
+; Returns:
+;   NUM_CARS updated
+;   CARS_ROW, CARS_COL, CARS_DIR updated
+; Modifies:
+;   -
+; Uses:
+;   NUM_CARS, CARS_ROW, CARS_COL, CARS_DIR, MAP_LINE_COUNT
+; Calls:
+;   -
+; ****************************************
+            PUBLIC SPAWN_CARS_ON_ROW_ZERO
+SPAWN_CARS_ON_ROW_ZERO PROC NEAR
+
+    PUSH AX
+    PUSH BX
+    PUSH SI
+
+    MOV BL, BYTE PTR [NUM_CARS]
+    XOR BH, BH
+
+    ; Determine direction from MAP_LINE_COUNT parity
+    MOV AL, BYTE PTR [MAP_LINE_COUNT]
+    AND AL, 01h         ; odd/even
+    JZ DIR_LEFT_TO_RIGHT
+
+    ; Direction: right to left (-1), start cols 79 and 39
+    MOV SI, BX
+    MOV BYTE PTR [CARS_ROW + SI], 0
+    MOV BYTE PTR [CARS_COL + SI], 79
+    MOV BYTE PTR [CARS_DIR + SI], -1
+    INC BL
+
+    MOV SI, BX
+    MOV BYTE PTR [CARS_ROW + SI], 0
+    MOV BYTE PTR [CARS_COL + SI], 39
+    MOV BYTE PTR [CARS_DIR + SI], -1
+    INC BL
+    JMP SPAWN_DONE
+
+DIR_LEFT_TO_RIGHT:
+    ; Direction: left to right (+1), start cols 0 and 40
+    MOV SI, BX
+    MOV BYTE PTR [CARS_ROW + SI], 0
+    MOV BYTE PTR [CARS_COL + SI], 0
+    MOV BYTE PTR [CARS_DIR + SI], 1
+    INC BL
+
+    MOV SI, BX
+    MOV BYTE PTR [CARS_ROW + SI], 0
+    MOV BYTE PTR [CARS_COL + SI], 40
+    MOV BYTE PTR [CARS_DIR + SI], 1
+    INC BL
+
+SPAWN_DONE:
+    ; Clamp to MAX_CARS
+    CMP BL, MAX_CARS
+    JBE STORE_COUNT
+    MOV BL, MAX_CARS
+STORE_COUNT:
+    MOV BYTE PTR [NUM_CARS], BL
+
+    POP SI
+    POP BX
+    POP AX
+    RET
+
+SPAWN_CARS_ON_ROW_ZERO ENDP
+
+; ****************************************
+; Shifts all car row positions down by 1
+; after a screen scroll. Cars that fall off row 24
+; are removed from the array.
+; Entry:
+;   NUM_CARS, CARS_ROW
+; Returns:
+;   NUM_CARS, CARS_ROW updated
+; Modifies:
+;   -
+; Uses:
+;   NUM_CARS, CARS_ROW, CARS_COL, CARS_DIR
+; Calls:
+;   -
+; ****************************************
+            PUBLIC SHIFT_CARS_DOWN
+SHIFT_CARS_DOWN PROC NEAR
+
+    PUSH AX
+    PUSH BX
+    PUSH CX
+    PUSH SI
+    PUSH DI
+
+    MOV CL, BYTE PTR [NUM_CARS]
+    XOR CH, CH
+    CMP CX, 0
+    JE SHIFT_CARS_END
+
+    XOR SI, SI
+    XOR DI, DI
+
+SHIFT_CARS_LOOP:
+    INC BYTE PTR [CARS_ROW + SI]
+    MOV AL, BYTE PTR [CARS_ROW + SI]
+    CMP AL, 25
+    JAE SHIFT_SKIP
+
+    MOV AL, BYTE PTR [CARS_ROW + SI]
+    MOV BYTE PTR [CARS_ROW + DI], AL
+    MOV AL, BYTE PTR [CARS_COL + SI]
+    MOV BYTE PTR [CARS_COL + DI], AL
+    MOV AL, BYTE PTR [CARS_DIR + SI]
+    MOV BYTE PTR [CARS_DIR + DI], AL
+    INC DI
+
+SHIFT_SKIP:
+    INC SI
+    LOOP SHIFT_CARS_LOOP
+
+    PUSH DI
+    POP AX
+    MOV BYTE PTR [NUM_CARS], AL
+
+SHIFT_CARS_END:
+    POP DI
+    POP SI
+    POP CX
+    POP BX
+    POP AX
+    RET
+
+SHIFT_CARS_DOWN ENDP
+
+; ****************************************
 ; Restores the terrain color at the current cursor position.
-; Green interior: does nothing (leaves the gap empty)
-; Green wall (col < FIELD_C1 or col >= FIELD_C2): repaints ASCII_WALL with COLOR_GREEN
-; Road solid block with gray color
-; Water solid block with cyan color
+; Green interior: erases with black space
+; Green wall: repaints ASCII_WALL with COLOR_GREEN
+; Road: solid block gray
+; Water: solid block cyan
 ; Entry:
 ;   Cursor already positioned at (POS_ROW, POS_COL)
 ; Returns:
@@ -303,7 +700,6 @@ NEW_TIMER_INTERRUPT ENDP
 ; Uses:
 ;   POS_ROW, POS_COL, LINE_TYPES
 ;   ASCII_WALL, COLOR_GREEN
-;   ATTR_BG_ROAD, ATTR_BG_WATER
 ; Calls:
 ;   PRINT_CHAR_ATTR
 ; ****************************************
@@ -313,7 +709,6 @@ RESTORE_TRAIL_COLOR PROC NEAR
     PUSH AX
     PUSH BX
 
-    ; Get terrain type for the players current row
     XOR BX, BX
     MOV BL, BYTE PTR [POS_ROW]
     MOV AL, [LINE_TYPES + BX]
@@ -323,35 +718,31 @@ RESTORE_TRAIL_COLOR PROC NEAR
     CMP AL, COLOR_ROAD
     JE  TRAIL_ROAD
 
-    ; Water solid block with cyan color
+    ; Water
     MOV BL, COLOR_WATER
     MOV AL, ASCII_WALL
     CALL PRINT_CHAR_ATTR
     JMP RESTORE_END
 
 TRAIL_ROAD:
-    ; Road solid block with gray color
     MOV BL, COLOR_ROAD
     MOV AL, ASCII_WALL
     CALL PRINT_CHAR_ATTR
     JMP RESTORE_END
 
 TRAIL_GREEN:
-    ; Check if column is in the side wall zone
     MOV AL, BYTE PTR [POS_COL]
     CMP AL, FIELD_C1
-    JB  TRAIL_GREEN_WALL        ; col < FIELD_C1, left wall
+    JB  TRAIL_GREEN_WALL
     CMP AL, FIELD_C2
-    JAE TRAIL_GREEN_WALL        ; col >= FIELD_C2, right wall
+    JAE TRAIL_GREEN_WALL
 
-    ; Green path interior erase the * with a black space
     MOV BL, 000h
     MOV AL, ' '
     CALL PRINT_CHAR_ATTR
     JMP RESTORE_END
 
 TRAIL_GREEN_WALL:
-    ; Side wall repaint the solid block with green color
     MOV BL, COLOR_GREEN
     MOV AL, ASCII_WALL
     CALL PRINT_CHAR_ATTR
@@ -365,13 +756,7 @@ RESTORE_TRAIL_COLOR ENDP
 
 ; ****************************************
 ; Updates CURRENT_COLOR according to the cyclic terrain sequence:
-; Green
-; Road
-; Green
-; Road
-; Green
-; Water
-; Reset and Green
+; Green -> Road -> Green -> Road -> Green -> Water -> reset
 ; Entry:
 ;   MAP_LINE_COUNT: counter of generated lines
 ; Returns:
@@ -402,7 +787,6 @@ UPDATE_MAP_COLOR PROC NEAR
     CMP AL, 90
     JB  SET_WATER
 
-    ; Cycle complete reset counter
     MOV BYTE PTR [MAP_LINE_COUNT], 0
 
 SET_GREEN:
@@ -455,7 +839,7 @@ PRINT_MULTIPLE_CHAR PROC NEAR
 PRINT_MULTIPLE_CHAR ENDP
 
 ; ****************************************
-; Draws the initial map: all rows in green
+; Draws the initial map: all rows green
 ; with walls at columns 0..FIELD_C1 and FIELD_C2..79.
 ; Also initializes the LINE_TYPES array to COLOR_GREEN.
 ; Entry:
@@ -480,13 +864,11 @@ DRAW_INITIAL_MAP PROC NEAR
     MOV BYTE PTR [TEMP_ROW], 0
 
 LOOP_DRAW_MAP:
-    ; Mark row as green in the logical array
     XOR AX, AX
     MOV AL, BYTE PTR [TEMP_ROW]
     MOV DI, AX
     MOV BYTE PTR [LINE_TYPES + DI], COLOR_GREEN
 
-    ; Draw left wall
     MOV DH, BYTE PTR [TEMP_ROW]
     MOV DL, 0
     CALL MOVE_CURSOR
@@ -495,7 +877,6 @@ LOOP_DRAW_MAP:
     MOV CX, FIELD_C1
     CALL PRINT_MULTIPLE_CHAR
 
-    ; Draw right wall
     MOV DL, FIELD_C2
     CALL MOVE_CURSOR
     MOV CX, 25
@@ -523,7 +904,7 @@ DRAW_INITIAL_MAP ENDP
 ;   -
 ; Uses:
 ;   MAP_LINE_COUNT, CURRENT_COLOR, DIV_SPEED,
-;   INT_COUNT, END_GAME
+;   INT_COUNT, END_GAME, NUM_CARS, CAR_INT_COUNT
 ; Calls:
 ;   -
 ; ****************************************
@@ -535,6 +916,8 @@ INIT_GAME PROC NEAR
     MOV BYTE PTR [DIV_SPEED], 2
     MOV BYTE PTR [INT_COUNT], 0
     MOV BYTE PTR [END_GAME], FALSE
+    MOV BYTE PTR [NUM_CARS], 0
+    MOV BYTE PTR [CAR_INT_COUNT], 0
 
     RET
 
@@ -735,20 +1118,18 @@ REGISTER_TIMER_INTERRUPT PROC NEAR
     PUSH DS
     PUSH ES
 
-    CLI ; Disable interrupts
+    CLI
 
-    ; Get current INT 08h vector
     MOV AX, 3508h
     INT 21h
-    MOV WORD PTR [OLD_INTERRUPT_BASE + 2], ES ; Save segment
-    MOV WORD PTR [OLD_INTERRUPT_BASE], BX ; Save offset
+    MOV WORD PTR [OLD_INTERRUPT_BASE + 2], ES
+    MOV WORD PTR [OLD_INTERRUPT_BASE], BX
 
-    ; Set new INT 08h vector
     MOV AX, 2508h
     MOV DX, OFFSET NEW_TIMER_INTERRUPT
     INT 21h
 
-    STI ; re-enabling interrupts
+    STI
 
     POP ES
     POP DS
@@ -779,15 +1160,14 @@ RESTORE_TIMER_INTERRUPT PROC NEAR
     PUSH DS
     PUSH DX
 
-    CLI ; Disable interrupts
+    CLI
 
-    ; Restore original INT 08h vector
     MOV AX, 2508h
     MOV DX, WORD PTR [OLD_INTERRUPT_BASE]
     MOV DS, WORD PTR [OLD_INTERRUPT_BASE + 2]
     INT 21h
 
-    STI ; re-enabling interrupts
+    STI
 
     POP DX
     POP DS
@@ -803,26 +1183,32 @@ CODE_SEG ENDS
 ; *************************************************************************
 DATA_SEG    SEGMENT PUBLIC
 
-    OLD_INTERRUPT_BASE  DW 0, 0 ; Previous timer ISR address
+    OLD_INTERRUPT_BASE  DW 0, 0
 
-    ; Player position increments (-1, 0, 1)
     INC_COL    DB 0
     INC_ROW    DB 0
 
-    POS_ROW    DB 0 ; Current player row
-    POS_COL    DB 0 ; Current player column
+    POS_ROW    DB 0
+    POS_COL    DB 0
 
-    DIV_SPEED  DB 0 ; Player moves every DIV_SPEED interrupts
-    INT_COUNT  DB 0 ; Interrupt counter until next update
+    DIV_SPEED  DB 0
+    INT_COUNT  DB 0
 
-    END_GAME   DB 0 ; TRUE when player collides
+    END_GAME   DB 0
 
-    MAP_LINE_COUNT DB 0 ; Generated line counter (controls terrain sequence)
-    CURRENT_COLOR  DB 0 ; Terrain type of the next line to generate
+    MAP_LINE_COUNT DB 0
+    CURRENT_COLOR  DB 0
 
-    TEMP_ROW       DB 0 ; Temporary variable for DRAW_INITIAL_MAP loop
+    TEMP_ROW       DB 0
 
-    LINE_TYPES     DB 26 DUP(0) ; Terrain type of each screen row (indices 0-24)
+    LINE_TYPES     DB 26 DUP(0)
+
+    ; Car subsystem
+    CAR_INT_COUNT  DB 0                  ; Interrupt counter for car movement
+    NUM_CARS       DB 0                  ; Number of active cars
+    CARS_ROW       DB MAX_CARS DUP(0)    ; Row of each car
+    CARS_COL       DB MAX_CARS DUP(0)    ; Column of each car
+    CARS_DIR       DB MAX_CARS DUP(0)    ; Direction of each car (+1 or -1)
 
 DATA_SEG ENDS
 
