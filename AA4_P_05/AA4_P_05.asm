@@ -68,6 +68,7 @@ MAIN    PROC    NEAR
     CALL INIT_SCREEN
     CALL HIDE_CURSOR
     CALL DRAW_INITIAL_MAP
+    CALL DRAW_SCORE
 
     ; Initial player position
     MOV BYTE PTR [POS_ROW], 20
@@ -177,6 +178,12 @@ DO_LOGIC:
     CALL MOVE_CURSOR
     CALL RESTORE_TRAIL_COLOR
 
+    ; PUNTUACIÓN: Si se desplaza hacia arriba (INC_ROW == -1), sumamos un punto
+    CMP BYTE PTR [INC_ROW], -1
+    JNE SKIP_SCORE_INC
+    INC WORD PTR [SCORE]
+SKIP_SCORE_INC:
+
     ; Update position 
     MOV AL, BYTE PTR [INC_COL]
     ADD BYTE PTR [POS_COL], AL
@@ -210,6 +217,16 @@ SHIFT_ARRAY:
     DEC SI
     CMP SI, -1
     JNE SHIFT_ARRAY
+
+    ; === BORRAR EL RASTRO DEL MARCADOR EN LA FILA 1 ===
+    MOV DH, 1               
+    MOV DL, 0               
+    CALL MOVE_CURSOR
+    XOR BX, BX
+    MOV BL, [LINE_TYPES + 1] 
+    MOV AL, ASCII_WALL
+    MOV CX, 4               
+    CALL PRINT_MULTIPLE_CHAR
 
     ; Generate new top line according to terrain sequence
     INC BYTE PTR [MAP_LINE_COUNT]
@@ -287,6 +304,8 @@ TRIGGER_COLLISION:
     MOV BYTE PTR [END_GAME], TRUE
 
 EXIT_ISR:
+    ; Redibujar el marcador al final asegura estabilidad visual sin rastros
+    CALL DRAW_SCORE 
     POP DS
     POP DI
     POP SI
@@ -297,6 +316,56 @@ EXIT_ISR:
     IRET
 
 NEW_TIMER_INTERRUPT ENDP
+
+; ****************************************
+; Converts score to string and prints it at top-left corner (0,0)
+; ****************************************
+            PUBLIC DRAW_SCORE
+DRAW_SCORE  PROC NEAR
+
+    PUSH AX
+    PUSH BX
+    PUSH CX
+    PUSH DX
+    PUSH SI
+
+    ; Convertir número SCORE a 4 dígitos en el búfer SCORE_STR
+    MOV AX, WORD PTR [SCORE]
+    MOV BX, 10
+    MOV CX, 4
+    LEA SI, [SCORE_STR + 3] 
+
+CONVERT_SCORE_LOOP:
+    XOR DX, DX
+    DIV BX                  
+    ADD DL, '0'             
+    MOV [SI], DL
+    DEC SI
+    LOOP CONVERT_SCORE_LOOP
+
+    ; Pintar el string formateado directamente en la fila 0, columnas 0-3
+    MOV DH, 0               
+    MOV DL, 0               
+    XOR SI, SI              
+
+PRINT_SCORE_LOOP:
+    CALL MOVE_CURSOR
+    MOV AL, BYTE PTR [SCORE_STR + SI]
+    MOV BL, 00Fh            
+    CALL PRINT_CHAR_ATTR
+    INC DL                  
+    INC SI
+    CMP SI, 4
+    JNE PRINT_SCORE_LOOP
+
+    POP SI
+    POP DX
+    POP CX
+    POP BX
+    POP AX
+    RET
+
+DRAW_SCORE  ENDP
 
 ; ****************************************
 ; Erases all active cars/logs from the screen dynamically.
@@ -324,7 +393,7 @@ ERASE_CARS_LOOP:
     ; Look up what background color needs to be restored
     XOR BX, BX
     MOV BL, DH
-    MOV BL, BYTE PTR [LINE_TYPES + BX] ; BL gets COLOR_ROAD or COLOR_WATER
+    MOV BL, BYTE PTR [LINE_TYPES + BX] 
     
     MOV AL, ASCII_WALL
     CALL PRINT_CHAR_ATTR
@@ -361,7 +430,7 @@ GET_RANDOM_COL PROC NEAR
     XOR AH, AH
     MOV CL, 80
     DIV CL
-    MOV AL, AH      ; Remainder is our new random column
+    MOV AL, AH      
 
     POP DX
     POP CX
@@ -386,8 +455,8 @@ MOVE_CARS   PROC NEAR
     CMP CX, 0
     JE MOVE_CARS_END
 
-    XOR SI, SI          ; current index
-    XOR DI, DI          ; write index
+    XOR SI, SI          
+    XOR DI, DI          
 
 MOVE_CARS_LOOP:
     MOV AL, BYTE PTR [CARS_DIR + SI]
@@ -396,17 +465,15 @@ MOVE_CARS_LOOP:
     ; Check horizontal bounds
     MOV BL, BYTE PTR [CARS_COL + SI]
     CMP BL, 80
-    JB KEEP_CAR         ; Inside screen (0-79) -> Keep moving safely
+    JB KEEP_CAR         
 
     ; --- WRAP-AROUND MECHANIC ---
     MOV AL, BYTE PTR [CARS_DIR + SI]
     CMP AL, 1
     JE WRAP_RIGHT
-    ; Left bound wrap (went below 0 to 255) -> Wrap to col 79
     MOV BYTE PTR [CARS_COL + SI], 79
     JMP KEEP_CAR
 WRAP_RIGHT:
-    ; Right bound wrap (reached 80) -> Wrap to col 0
     MOV BYTE PTR [CARS_COL + SI], 0
 
 KEEP_CAR:
@@ -461,7 +528,7 @@ DRAW_CARS_LOOP:
     MOV DL, BYTE PTR [CARS_COL + SI]
     CALL MOVE_CURSOR
     MOV AL, ASCII_CAR
-    MOV BL, BYTE PTR [CARS_ATTR + SI] ; Dynamic color attribute loaded here
+    MOV BL, BYTE PTR [CARS_ATTR + SI] 
     CALL PRINT_CHAR_ATTR
     INC SI
     LOOP DRAW_CARS_LOOP
@@ -534,21 +601,18 @@ SPAWN_CARS_ON_ROW_ZERO PROC NEAR
     MOV DH, BYTE PTR [CURRENT_COLOR]
 
     MOV AL, BYTE PTR [MAP_LINE_COUNT]
-    AND AL, 01h         ; odd/even
+    AND AL, 01h         
     
-    ; FIX FOR JUMP OUT OF RANGE BY INVERTING THE CONDITIONAL JUMP
     JNZ DIR_RIGHT_TO_LEFT
     JMP DIR_LEFT_TO_RIGHT
 
 DIR_RIGHT_TO_LEFT:
-    ; Direction: right to left (-1)
     CALL GET_RANDOM_COL
     MOV SI, BX
     MOV BYTE PTR [CARS_ROW + SI], 0
     MOV BYTE PTR [CARS_COL + SI], AL
     MOV BYTE PTR [CARS_DIR + SI], -1
     
-    ; Pick attribute for Obstacle 1
     PUSH AX
     CMP DH, COLOR_WATER
     JE L_LOG1
@@ -559,22 +623,21 @@ DIR_RIGHT_TO_LEFT:
     JE L_CAR1_W
     CMP AH, 1
     JE L_CAR1_R
-    MOV AL, 0Eh         ; Yellow car
+    MOV AL, 0Eh         
     JMP L_SAVE1
 L_CAR1_W:
-    MOV AL, 0Fh         ; White car
+    MOV AL, 0Fh         
     JMP L_SAVE1
 L_CAR1_R:
-    MOV AL, 0Ch         ; Bright Red car
+    MOV AL, 0Ch         
     JMP L_SAVE1
 L_LOG1:
-    MOV AL, 06h         ; Brown log
+    MOV AL, 06h         
 L_SAVE1:
     MOV BYTE PTR [CARS_ATTR + SI], AL
     POP AX
     INC BL
 
-    ; Obstacle 2 offset
     ADD AL, 40
     CMP AL, 80
     JB SET_OBJ2_L
@@ -585,7 +648,6 @@ SET_OBJ2_L:
     MOV BYTE PTR [CARS_COL + SI], AL
     MOV BYTE PTR [CARS_DIR + SI], -1
     
-    ; Pick attribute for Obstacle 2
     PUSH AX
     CMP DH, COLOR_WATER
     JE L_LOG2
@@ -613,14 +675,12 @@ L_SAVE2:
     JMP SPAWN_DONE
 
 DIR_LEFT_TO_RIGHT:
-    ; Direction: left to right (+1)
     CALL GET_RANDOM_COL
     MOV SI, BX
     MOV BYTE PTR [CARS_ROW + SI], 0
     MOV BYTE PTR [CARS_COL + SI], AL
     MOV BYTE PTR [CARS_DIR + SI], 1
     
-    ; Pick attribute for Obstacle 1
     PUSH AX
     CMP DH, COLOR_WATER
     JE R_LOG1
@@ -646,7 +706,6 @@ R_SAVE1:
     POP AX
     INC BL
 
-    ; Obstacle 2 offset
     ADD AL, 40
     CMP AL, 80
     JB SET_OBJ2_R
@@ -657,7 +716,6 @@ SET_OBJ2_R:
     MOV BYTE PTR [CARS_COL + SI], AL
     MOV BYTE PTR [CARS_DIR + SI], 1
     
-    ; Pick attribute for Obstacle 2
     PUSH AX
     CMP DH, COLOR_WATER
     JE R_LOG2
@@ -771,7 +829,6 @@ RESTORE_TRAIL_COLOR PROC NEAR
     CMP AL, COLOR_ROAD
     JE  TRAIL_ROAD
 
-    ; Water
     MOV BL, COLOR_WATER
     MOV AL, ASCII_WALL
     CALL PRINT_CHAR_ATTR
@@ -924,6 +981,7 @@ INIT_GAME PROC NEAR
     MOV BYTE PTR [END_GAME], FALSE
     MOV BYTE PTR [NUM_CARS], 0
     MOV BYTE PTR [CAR_INT_COUNT], 0
+    MOV WORD PTR [SCORE], 0
 
     RET
 
@@ -993,7 +1051,7 @@ MOVE_CURSOR PROC NEAR
     PUSH BX
 
     MOV AH, 02h
-    XOR BX, BX
+    XOR BH, BH ; <- CORREGIDO: Ahora limpia correctamente el registro de 8 bits
     INT 10h
 
     POP BX
@@ -1123,12 +1181,16 @@ DATA_SEG    SEGMENT PUBLIC
     LINE_TYPES     DB 26 DUP(0)
 
     ; Car/Log Subsystem
-    CAR_INT_COUNT  DB 0                                  ; Interrupt counter for movement
-    NUM_CARS       DB 0                                  ; Number of active obstacles
-    CARS_ROW       DB MAX_CARS DUP(0)                    ; Row of each object
-    CARS_COL       DB MAX_CARS DUP(0)                    ; Column of each object
-    CARS_DIR       DB MAX_CARS DUP(0)                    ; Direction (+1 or -1)
-    CARS_ATTR      DB MAX_CARS DUP(0)                    ; Individual color attribute
+    CAR_INT_COUNT  DB 0
+    NUM_CARS       DB 0
+    CARS_ROW       DB MAX_CARS DUP(0)
+    CARS_COL       DB MAX_CARS DUP(0)
+    CARS_DIR       DB MAX_CARS DUP(0)
+    CARS_ATTR      DB MAX_CARS DUP(0)
+
+    ; Score Subsystem
+    SCORE          DW 0
+    SCORE_STR      DB '0','0','0','0'
 
 DATA_SEG ENDS
 
