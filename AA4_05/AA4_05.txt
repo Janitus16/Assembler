@@ -1,0 +1,6 @@
+Se usa la flecha hacia arriba para hacer que el conejo suba, la flecha de la derecha y izquierda desplaza el conejo a los lados.
+El objetivo del juego es no chocar con lo vehículos, troncos ni paredes del juego avanzando hacia arriba para conseguir la mayor puntuación posible.
+Cada vez que presionas para subir suma un punto.
+
+"Q"  / Salir
+"Y/N"  /  En el menu para volver y salir del juego
