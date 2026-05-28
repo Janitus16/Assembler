@@ -1,0 +1,4 @@
+mount d D:\fork
+D:
+tasm snake.asm
+tlink /t snake.obj
