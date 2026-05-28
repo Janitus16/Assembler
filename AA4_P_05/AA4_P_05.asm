@@ -5,37 +5,48 @@
 SGROUP      GROUP   CODE_SEG, DATA_SEG
             ASSUME  CS:SGROUP, DS:SGROUP, SS:SGROUP
 
+    ; LOGICAL CONSTANTS
     TRUE  EQU 1
     FALSE EQU 0
 
+    ; ASCII CODES FOR SPECIAL KEYS 
     ASCII_SPECIAL_KEY EQU 00
     ASCII_LEFT        EQU 04Bh
     ASCII_RIGHT       EQU 04Dh
     ASCII_UP          EQU 048h
     ASCII_QUIT        EQU 071h ; 'q'
 
+    ; PLAYER ASCII / ATTR
     ASCII_PLAYER      EQU 02Ah ; *
     ATTR_PLAYER       EQU 00Fh ; white
 
+    ; PATH WALL ASCII / ATTR
     ASCII_WALL        EQU 0DBh 
 
-    ASCII_CAR         EQU 0DBh 
+    ; CAR/LOG ASCII
+    ASCII_CAR         EQU 0DBh ; solid block
 
+    ; CURSOR
     CURSOR_SIZE_HIDE  EQU 02607h ; BIT 5 OF CH = 1 MEANS HIDE CURSOR
     CURSOR_SIZE_SHOW  EQU 00607h
 
+    ; SCREEN DIMENSIONS
     SCREEN_MAX_ROWS   EQU 25
     SCREEN_MAX_COLS   EQU 80
 
+    ; FIELD BOUNDARIES
     FIELD_C1 EQU 25
     FIELD_C2 EQU 55
 
-    COLOR_GREEN EQU 02h 
-    COLOR_ROAD  EQU 08h 
-    COLOR_WATER EQU 03h 
+    ; TERRAIN COLORS 
+    COLOR_GREEN EQU 02h ; Green 
+    COLOR_ROAD  EQU 08h ; Gray
+    COLOR_WATER EQU 03h ; Cyan 
 
+    ; NUMBER OF CARS
     MAX_CARS      EQU 40
 
+    ; CAR SPEED DIVIDER
     CAR_DIV_SPEED EQU 3
 
 ; *************************************************************************
@@ -175,18 +186,6 @@ MAIN    ENDP
 ; Game timer interrupt service routine
 ; Called 18.2 times per second by the operating system
 ; Calls previous ISR
-; Entry: 
-;   -
-; Returns:
-;   -
-; Modifies:
-;   -
-; Uses: 
-;   OLD_INTERRUPT_BASE memory variable
-;   END_GAME memory variable
-;   CAR_INT_COUNT memory variable
-;   INT_COUNT memory variable
-;   DIV_SPEED memory variable
 ; ****************************************
 PUBLIC NEW_TIMER_INTERRUPT
 NEW_TIMER_INTERRUPT PROC NEAR
@@ -265,15 +264,15 @@ SHIFT_ARRAY:
     MOV [LINE_TYPES + SI + 1], AL
     DEC SI
     CMP SI, -1
-    JNESHIFT_ARRAY
+    JNE SHIFT_ARRAY
 
-    MOV DH, 1               
-    MOV DL, 0               
+    MOV DH, 1                
+    MOV DL, 0                
     CALL MOVE_CURSOR
     XOR BX, BX
     MOV BL, [LINE_TYPES + 1] 
     MOV AL, ASCII_WALL
-    MOV CX, 4               
+    MOV CX, 4                
     CALL PRINT_MULTIPLE_CHAR
 
     INC BYTE PTR [MAP_LINE_COUNT]
@@ -358,18 +357,6 @@ NEW_TIMER_INTERRUPT ENDP
 
 ; ****************************************
 ; Converts score to string and prints it at top-left corner
-; Entry: 
-;   -
-; Returns:
-;   -
-; Modifies:
-;   -
-; Uses: 
-;   SCORE memory variable
-;   SCORE_STR memory variable
-; Calls:
-;   MOVE_CURSOR
-;   PRINT_CHAR_ATTR
 ; ****************************************
 PUBLIC DRAW_SCORE
 DRAW_SCORE  PROC NEAR
@@ -393,8 +380,8 @@ CONVERT_SCORE_LOOP:
     DEC SI
     LOOP CONVERT_SCORE_LOOP
 
-    MOV DH, 0               
-    MOV DL, 0               
+    MOV DH, 0                
+    MOV DL, 0                
     XOR SI, SI              
 
 PRINT_SCORE_LOOP:
@@ -418,20 +405,6 @@ DRAW_SCORE  ENDP
 
 ; ****************************************
 ; Erases all active objects from the screen dynamically
-; Entry: 
-;   -
-; Returns:
-;   -
-; Modifies:
-;   -
-; Uses: 
-;   NUM_CARS memory variable
-;   CARS_ROW memory variable
-;   CARS_COL memory variable
-;   LINE_TYPES memory variable
-; Calls:
-;   MOVE_CURSOR
-;   PRINT_CHAR_ATTR
 ; ****************************************
 PUBLIC ERASE_CARS
 ERASE_CARS  PROC NEAR
@@ -474,16 +447,6 @@ ERASE_CARS  ENDP
 
 ; ****************************************
 ; Generates a random column between 0 and 79
-; Entry: 
-;   -
-; Returns:
-;   AL: random column index
-; Modifies:
-;   -
-; Uses: 
-;   -
-; Calls:
-;   int 21h, service AH=2Ch
 ; ****************************************
 PUBLIC GET_RANDOM_COL
 GET_RANDOM_COL PROC NEAR
@@ -508,16 +471,6 @@ GET_RANDOM_COL ENDP
 
 ; ****************************************
 ; Moves active cars/logs with wrap-around behavior
-; Entry: 
-;   -
-; Returns:
-;   -
-; Modifies:
-;   -
-; Uses: 
-;   NUM_CARS memory variable
-;   CARS_COL memory variable
-;   CARS_DIR memory variable
 ; ****************************************
 PUBLIC MOVE_CARS
 MOVE_CARS   PROC NEAR
@@ -584,20 +537,6 @@ MOVE_CARS   ENDP
 
 ; ****************************************
 ; Draws all active objects using their color attribute
-; Entry: 
-;   -
-; Returns:
-;   -
-; Modifies:
-;   -
-; Uses: 
-;   NUM_CARS memory variable
-;   CARS_ROW memory variable
-;   CARS_COL memory variable
-;   CARS_ATTR memory variable
-; Calls:
-;   MOVE_CURSOR
-;   PRINT_CHAR_ATTR
 ; ****************************************
 PUBLIC DRAW_CARS
 DRAW_CARS   PROC NEAR
@@ -636,17 +575,6 @@ DRAW_CARS   ENDP
 
 ; ****************************************
 ; Checks if any object occupies the same cell as the player
-; Entry: 
-;   -
-; Returns:
-;   -
-; Modifies:
-;   -
-; Uses: 
-;   NUM_CARS memory variable
-;   POS_ROW memory variable
-;   POS_COL memory variable
-;   END_GAME memory variable
 ; ****************************************
 PUBLIC CHECK_CAR_COLLISION
 CHECK_CAR_COLLISION PROC NEAR
@@ -687,18 +615,6 @@ CHECK_CAR_COLLISION ENDP
 
 ; ****************************************
 ; Spawns active objects on row zero according to terrain type
-; Entry: 
-;   -
-; Returns:
-;   -
-; Modifies:
-;   -
-; Uses: 
-;   NUM_CARS memory variable
-;   CURRENT_COLOR memory variable
-;   MAP_LINE_COUNT memory variable
-; Calls:
-;   GET_RANDOM_COL
 ; ****************************************
 PUBLIC SPAWN_CARS_ON_ROW_ZERO
 SPAWN_CARS_ON_ROW_ZERO PROC NEAR
@@ -873,15 +789,6 @@ SPAWN_CARS_ON_ROW_ZERO ENDP
 
 ; ****************************************
 ; Shifts all active object row positions down by 1
-; Entry: 
-;   -
-; Returns:
-;   -
-; Modifies:
-;   -
-; Uses: 
-;   NUM_CARS memory variable
-;   CARS_ROW memory variable
 ; ****************************************
 PUBLIC SHIFT_CARS_DOWN
 SHIFT_CARS_DOWN PROC NEAR
@@ -918,11 +825,10 @@ SHIFT_CARS_LOOP:
 
 SHIFT_SKIP:
     INC SI
-    LOOP SHIFT_CARS_DOWN
+    LOOP SHIFT_CARS_LOOP
 
-    PUSH DI
-    POP AX
-    MOV BYTE PTR [NUM_CARS], AL
+    MOV BX, DI
+    MOV BYTE PTR [NUM_CARS], BL
 
 SHIFT_CARS_END:
     POP DI
@@ -936,18 +842,6 @@ SHIFT_CARS_DOWN ENDP
 
 ; ****************************************
 ; Restores the background terrain color at current cell
-; Entry: 
-;   -
-; Returns:
-;   -
-; Modifies:
-;   -
-; Uses: 
-;   POS_ROW memory variable
-;   POS_COL memory variable
-;   LINE_TYPES memory variable
-; Calls:
-;   PRINT_CHAR_ATTR
 ; ****************************************
 PUBLIC RESTORE_TRAIL_COLOR
 RESTORE_TRAIL_COLOR PROC NEAR
@@ -1001,15 +895,6 @@ RESTORE_TRAIL_COLOR ENDP
 
 ; ****************************************
 ; Updates CURRENT_COLOR sequence limits
-; Entry: 
-;   -
-; Returns:
-;   -
-; Modifies:
-;   -
-; Uses: 
-;   MAP_LINE_COUNT memory variable
-;   CURRENT_COLOR memory variable
 ; ****************************************
 PUBLIC UPDATE_MAP_COLOR
 UPDATE_MAP_COLOR PROC NEAR
@@ -1051,18 +936,6 @@ UPDATE_MAP_COLOR ENDP
 
 ; ****************************************
 ; Prints a character multiple times
-; Entry: 
-;   AL: ASCII character
-;   BL: attribute
-;   CX: count
-; Returns:
-;   -
-; Modifies:
-;   -
-; Uses: 
-;   -
-; Calls:
-;   int 10h, service AH=09h
 ; ****************************************
 PUBLIC PRINT_MULTIPLE_CHAR
 PRINT_MULTIPLE_CHAR PROC NEAR
@@ -1082,18 +955,6 @@ PRINT_MULTIPLE_CHAR ENDP
 
 ; ****************************************
 ; Draws the initial green map matrix
-; Entry: 
-;   -
-; Returns:
-;   -
-; Modifies:
-;   -
-; Uses: 
-;   TEMP_ROW memory variable
-;   LINE_TYPES memory variable
-; Calls:
-;   MOVE_CURSOR
-;   PRINT_MULTIPLE_CHAR
 ; ****************************************
 PUBLIC DRAW_INITIAL_MAP
 DRAW_INITIAL_MAP PROC NEAR
@@ -1138,21 +999,6 @@ DRAW_INITIAL_MAP ENDP
 
 ; ****************************************
 ; Reset internal game variables
-; Entry: 
-;   -
-; Returns:
-;   -
-; Modifies:
-;   -
-; Uses: 
-;   MAP_LINE_COUNT memory variable
-;   CURRENT_COLOR memory variable
-;   DIV_SPEED memory variable
-;   INT_COUNT memory variable
-;   END_GAME memory variable
-;   NUM_CARS memory variable
-;   CAR_INT_COUNT memory variable
-;   SCORE memory variable
 ; ****************************************
 PUBLIC INIT_GAME
 INIT_GAME PROC NEAR
@@ -1172,16 +1018,6 @@ INIT_GAME ENDP
 
 ; ****************************************
 ; Set screen to mode 3
-; Entry: 
-;   -
-; Returns:
-;   -
-; Modifies:
-;   -
-; Uses: 
-;   -
-; Calls:
-;   int 10h, service AH=00h
 ; ****************************************
 PUBLIC INIT_SCREEN
 INIT_SCREEN PROC NEAR
@@ -1198,16 +1034,6 @@ INIT_SCREEN ENDP
 
 ; ****************************************
 ; Hides text cursor
-; Entry: 
-;   -
-; Returns:
-;   -
-; Modifies:
-;   -
-; Uses: 
-;   CURSOR_SIZE_HIDE constant
-; Calls:
-;   int 10h, service AH=01h
 ; ****************************************
 PUBLIC HIDE_CURSOR
 HIDE_CURSOR PROC NEAR
@@ -1227,16 +1053,6 @@ HIDE_CURSOR ENDP
 
 ; ****************************************
 ; Shows text cursor
-; Entry: 
-;   -
-; Returns:
-;   -
-; Modifies:
-;   -
-; Uses: 
-;   CURSOR_SIZE_SHOW constant
-; Calls:
-;   int 10h, service AH=01h
 ; ****************************************
 PUBLIC SHOW_CURSOR
 SHOW_CURSOR PROC NEAR
@@ -1256,16 +1072,6 @@ SHOW_CURSOR ENDP
 
 ; ****************************************
 ; Moves cursor to coordinate
-; Entry: 
-;   (DH, DL): coordinates -> (row, col)
-; Returns:
-;   -
-; Modifies:
-;   -
-; Uses: 
-;   -
-; Calls:
-;   int 10h, service AH=02h
 ; ****************************************
 PUBLIC MOVE_CURSOR
 MOVE_CURSOR PROC NEAR
@@ -1285,17 +1091,6 @@ MOVE_CURSOR ENDP
 
 ; ****************************************
 ; Prints a character and attribute at cursor position
-; Entry: 
-;   AL: ASCII code
-;   BL: attribute
-; Returns:
-;   -
-; Modifies:
-;   -
-; Uses: 
-;   -
-; Calls:
-;   int 10h, service AH=09h
 ; ****************************************
 PUBLIC PRINT_CHAR_ATTR
 PRINT_CHAR_ATTR PROC NEAR
@@ -1318,16 +1113,6 @@ PRINT_CHAR_ATTR ENDP
 
 ; ****************************************
 ; Reads char from keyboard without echo
-; Entry: 
-;   -
-; Returns:
-;   AL: ASCII code
-; Modifies:
-;   -
-; Uses: 
-;   -
-; Calls:
-;   int 21h, service AH=08h
 ; ****************************************
 PUBLIC READ_CHAR
 READ_CHAR PROC NEAR
@@ -1341,17 +1126,6 @@ READ_CHAR ENDP
 
 ; ****************************************
 ; Replaces current timer ISR with game timer ISR
-; Entry: 
-;   -
-; Returns:
-;   -
-; Modifies:
-;   -
-; Uses: 
-;   OLD_INTERRUPT_BASE memory variable
-; Calls:
-;   int 21h, service AH=35h
-;   int 21h, service AH=25h
 ; ****************************************
 PUBLIC REGISTER_TIMER_INTERRUPT
 REGISTER_TIMER_INTERRUPT PROC NEAR
@@ -1384,16 +1158,6 @@ REGISTER_TIMER_INTERRUPT ENDP
 
 ; ****************************************
 ; Restore system timer ISR
-; Entry: 
-;   -
-; Returns:
-;   -
-; Modifies:
-;   -
-; Uses: 
-;   OLD_INTERRUPT_BASE memory variable
-; Calls:
-;   int 21h, service AH=25h
 ; ****************************************
 PUBLIC RESTORE_TIMER_INTERRUPT
 RESTORE_TIMER_INTERRUPT PROC NEAR
